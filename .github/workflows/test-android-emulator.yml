@@ -107,18 +107,51 @@ jobs:
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
             sleep 16
-            adb exec-out screencap -p > emulator-artifacts/revo-screen.png
-            adb shell uiautomator dump /sdcard/revo-window.xml || true
-            adb pull /sdcard/revo-window.xml emulator-artifacts/revo-window.xml || true
+
+            adb exec-out screencap -p > emulator-artifacts/revo-first-screen.png
+            adb shell uiautomator dump /sdcard/revo-window.xml
+            adb pull /sdcard/revo-window.xml emulator-artifacts/revo-window.xml
             adb logcat -d -v time > emulator-artifacts/logcat.txt
             grep -E 'RevoWeb|RevoProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
             cat emulator-artifacts/revo-log.txt
-            grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat.txt
-            grep -q 'RevoProbe' emulator-artifacts/logcat.txt
-            if grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
-              echo 'FAIL: boot screen is still visible after 12 seconds'
+
+            grep -q 'text="Gather"' emulator-artifacts/revo-window.xml
+            grep -q 'text="Start"' emulator-artifacts/revo-window.xml
+            grep -q 'text="Preset"' emulator-artifacts/revo-window.xml
+            if grep -q 'text="Starting Revolution Macro' emulator-artifacts/revo-window.xml; then
+              echo 'FAIL: startup overlay is still visible'
               exit 1
             fi
+
+            python3 - <<'PY' > emulator-artifacts/disable-center.txt
+            import re, xml.etree.ElementTree as ET
+            root = ET.parse('emulator-artifacts/revo-window.xml').getroot()
+            for n in root.iter('node'):
+                if n.attrib.get('text') == 'Disable':
+                    b = n.attrib.get('bounds','')
+                    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', b)
+                    if m:
+                        x1,y1,x2,y2 = map(int,m.groups())
+                        print((x1+x2)//2, (y1+y2)//2)
+                        break
+            PY
+            if [ -s emulator-artifacts/disable-center.txt ]; then
+              read X Y < emulator-artifacts/disable-center.txt
+              adb shell input tap "$X" "$Y"
+              sleep 3
+            fi
+
+            adb exec-out screencap -p > emulator-artifacts/revo-main-screen.png
+            adb shell uiautomator dump /sdcard/revo-main.xml
+            adb pull /sdcard/revo-main.xml emulator-artifacts/revo-main.xml
+            grep -q 'text="Gather"' emulator-artifacts/revo-main.xml
+            grep -q 'text="Start"' emulator-artifacts/revo-main.xml
+            grep -q 'text="Status"' emulator-artifacts/revo-main.xml
+            if grep -q 'text="Starting Revolution Macro' emulator-artifacts/revo-main.xml; then
+              echo 'FAIL: startup overlay returned'
+              exit 1
+            fi
+            echo 'PASS: Revo Android reached interactive main UI'
 
       - name: Upload emulator evidence
         if: always()
