@@ -55,6 +55,7 @@ for (const png of pngs) {
 fs.mkdirSync(assetsDir, { recursive: true });
 let matched = 0;
 const missing = [];
+const recoveredNames = [];
 for (const name of [...refs].sort()) {
   const hash = name.slice(-12, -4);
   const hits = byHash.get(hash) || [];
@@ -63,6 +64,7 @@ for (const name of [...refs].sort()) {
     continue;
   }
   fs.writeFileSync(path.join(assetsDir, name), hits[0].data);
+  recoveredNames.push(name);
   matched++;
 }
 
@@ -75,3 +77,12 @@ if (matched !== refs.size || matched < 100) {
   console.error('PNG recovery did not satisfy all frontend references');
   process.exit(1);
 }
+
+// This manifest is only for Android regression testing. It lets the emulator
+// fetch every recovered image through the same https://revo.local asset path
+// that the real frontend uses.
+fs.writeFileSync(
+  path.join(wwwDir, 'revo-png-manifest.json'),
+  JSON.stringify({ count: recoveredNames.length, assets: recoveredNames }, null, 2)
+);
+console.log(`Wrote revo-png-manifest.json with ${recoveredNames.length} assets`);
