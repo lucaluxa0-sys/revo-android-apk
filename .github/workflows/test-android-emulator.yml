@@ -102,25 +102,20 @@ jobs:
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
             sleep 22
+            adb shell input tap 400 1380 || true
+            sleep 1
             adb exec-out screencap -p > emulator-artifacts/revo-main-screen.png
             adb logcat -d -v time > emulator-artifacts/logcat.txt
             grep -E 'RevoWeb|RevoProbe|RevoDismiss|RevoMainProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
             cat emulator-artifacts/revo-log.txt
-
             grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat.txt
             grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
             grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
-            if grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
-              echo 'FAIL: startup overlay still visible'
-              exit 1
-            fi
+            test "$(grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -c 'Starting Revolution Macro' || true)" -eq 0
             grep 'RevoDismiss' emulator-artifacts/logcat.txt | grep -q 'clicked'
             grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
             grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
-            if grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
-              echo 'FAIL: startup overlay returned'
-              exit 1
-            fi
+            test "$(grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -c 'Starting Revolution Macro' || true)" -eq 0
             echo 'PASS: Revo Android reached interactive WebView UI and accepted first-run interaction'
 
       - name: Upload emulator evidence
