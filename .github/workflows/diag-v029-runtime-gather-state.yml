@@ -70,19 +70,15 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
-            adb shell am force-stop com.revolution.android || true
+            adb shell am force-stop com.revolution.android
             adb shell am start -W -n com.revolution.android/.MainActivity
             sleep 22
             adb exec-out screencap -p > emulator-artifacts/revo-v029-gather-state.png
             adb logcat -d -v time > emulator-artifacts/logcat-v029-gather-state.txt
-            if grep -q 'RevoV029GatherState ERROR' emulator-artifacts/logcat-v029-gather-state.txt; then
-              grep 'RevoV029GatherState ERROR' emulator-artifacts/logcat-v029-gather-state.txt
-              exit 1
-            fi
+            ! grep -q 'RevoV029GatherState ERROR' emulator-artifacts/logcat-v029-gather-state.txt
             grep 'RevoV029GatherState {' emulator-artifacts/logcat-v029-gather-state.txt | tail -n1 > emulator-artifacts/gather-state.txt
             cat emulator-artifacts/gather-state.txt
             test -s emulator-artifacts/gather-state.txt
