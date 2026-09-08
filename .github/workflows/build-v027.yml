@@ -1,0 +1,247 @@
+name: Build test and publish Revo Android v0.2.7
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/recover-vite-pngs.js'
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
+      - 'patches/android-backend-v0.2.6.js'
+      - '.github/workflows/build-v027.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Restore Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
+          unzip -q /tmp/revo-android-source.zip
+          test -f revo-android/app/build.gradle.kts
+          cp revo-android/app/src/main/java/com/revolution/android/MainActivity.java /tmp/MainActivity.clean.java
+
+      - name: Download exact public Revolution Macro release
+        shell: bash
+        run: |
+          mkdir -p .cache
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+
+      - name: Extract Revo frontend
+        shell: bash
+        run: |
+          mkdir -p revo-android/app/src/main/assets/www
+          python3 revo-android/extract_revo_frontend.py \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html \
+             revo-android/app/src/main/assets/www/index.html
+
+      - name: Recover every real Revo PNG asset
+        shell: bash
+        run: |
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www \
+            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('revo-android/app/src/main/assets/www')
+          manifest = json.loads((root / 'revo-png-manifest.json').read_text())
+          assert manifest['count'] == 113, manifest
+          missing = [x for x in manifest['assets'] if not (root / 'assets' / x).is_file()]
+          assert not missing, missing
+          assert all((root / 'assets' / x).stat().st_size > 100 for x in manifest['assets'])
+          print('PASS: recovered all 113 exact Revo frontend PNG assets')
+          PY
+
+      - name: Install real Revolution Macro launcher icon
+        shell: bash
+        run: |
+          rm -rf /tmp/revo-icon
+          mkdir -p /tmp/revo-icon revo-android/app/src/main/res/drawable-nodpi
+          7z x .cache/RevolutionMacro.exe -o/tmp/revo-icon '.rsrc/ICON/*' >/dev/null
+          ICON=/tmp/revo-icon/.rsrc/ICON/3
+          test -s "$ICON"
+          file "$ICON" | tee /tmp/revo-icon-file.txt
+          grep -q 'PNG image data, 256 x 256' /tmp/revo-icon-file.txt
+          cp "$ICON" revo-android/app/src/main/res/drawable-nodpi/revo_icon.png
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('revo-android/app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          s = re.sub(r'\s+android:icon="[^"]*"', '', s)
+          s = re.sub(r'\s+android:roundIcon="[^"]*"', '', s)
+          s = s.replace('<application', '<application\n        android:icon="@drawable/revo_icon"\n        android:roundIcon="@drawable/revo_icon"', 1)
+          p.write_text(s)
+          assert '@drawable/revo_icon' in s
+          print('PASS: Android manifest points at the real Revolution Macro icon')
+          PY
+
+      - name: Apply Android runtime and backends through v0.2.6
+        shell: bash
+        run: |
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Instrument WebView for emulator asset proof
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+          marker = 'web.loadUrl("https://revo.local/index.android.html");'
+          probe = r'''web.loadUrl("https://revo.local/index.android.html");
+        Handler assetProbeHandler = new Handler(Looper.getMainLooper());
+        assetProbeHandler.postDelayed(() -> {
+            if (web == null) return;
+            web.evaluateJavascript(
+                "(async()=>{try{const m=await (await fetch('/revo-png-manifest.json',{cache:'no-store'})).json();const rows=await Promise.all(m.assets.map(async n=>{try{const r=await fetch('/assets/'+n,{cache:'no-store'});const b=await r.blob();return {n,ok:r.ok,status:r.status,size:b.size,type:r.headers.get('content-type')||''};}catch(e){return {n,ok:false,error:String(e)};}}));const bad=rows.filter(x=>!x.ok||x.size<100);const domImgs=[...document.images];const domBroken=domImgs.filter(x=>x.complete&&x.naturalWidth===0).map(x=>x.src);console.error('RevoAssetProbe '+JSON.stringify({manifest:m.count,fetched:rows.length,good:rows.length-bad.length,bad:bad.slice(0,10),domImages:domImgs.length,domBroken:domBroken.slice(0,10),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,backend:window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion}));}catch(e){console.error('RevoAssetProbe ERROR '+String(e));}})()",
+                value -> Log.e("RevoAssetSchedule", String.valueOf(value)));
+        }, 18000);'''
+          if marker not in s:
+              raise SystemExit('MainActivity loadUrl marker not found')
+          s = s.replace(marker, probe, 1)
+          p.write_text(s)
+          PY
+
+      - name: Build emulator diagnostic APK
+        shell: bash
+        run: gradle -p revo-android --stacktrace :app:assembleDebug
+
+      - name: Verify icon is packaged
+        shell: bash
+        run: |
+          APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | grep -q 'revo_icon.png'
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -E 'application-icon|application-label' | tee /tmp/apk-badging.txt
+          grep -q 'revo_icon.png' /tmp/apk-badging.txt
+          echo 'PASS: real Revo launcher icon is packaged and selected'
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot Android emulator and verify all Revo PNGs
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -eu
+            mkdir -p emulator-artifacts
+            APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 24
+            adb exec-out screencap -p > emulator-artifacts/revo-v027-assets.png
+            adb logcat -d -v time > emulator-artifacts/logcat-v027.txt
+            grep -E 'RevoAssetProbe|android-runtime|android-backend|preload' emulator-artifacts/logcat-v027.txt > emulator-artifacts/revo-v027-log.txt || true
+            cat emulator-artifacts/revo-v027-log.txt
+            PROBE="$(grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1)"
+            test -n "$PROBE"
+            echo "$PROBE" | grep -q '"manifest":113'
+            echo "$PROBE" | grep -q '"fetched":113'
+            echo "$PROBE" | grep -q '"good":113'
+            echo "$PROBE" | grep -q '"bad":\[\]'
+            echo "$PROBE" | grep -q '"domBroken":\[\]'
+            echo "$PROBE" | grep -q '"runtime":"object"'
+            echo "$PROBE" | grep -q '"dataRuntime":"object"'
+            echo "$PROBE" | grep -q '"backend":"0.2.6"'
+            echo 'PASS: Android emulator fetched all 113 Revo PNGs with zero broken rendered images'
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-android-v0.2.7-emulator-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
+
+      - name: Restore clean MainActivity and rebuild final APK
+        shell: bash
+        run: |
+          cp /tmp/MainActivity.clean.java revo-android/app/src/main/java/com/revolution/android/MainActivity.java
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep -q 'revo_icon.png'
+          cp "$APK" /tmp/RevolutionMacro-Android-v0.2.7-dev.apk
+          sha256sum /tmp/RevolutionMacro-Android-v0.2.7-dev.apk | sed 's#/tmp/##' > /tmp/SHA256SUMS-v027.txt
+          cp /tmp/RevolutionMacro-Android-v0.2.7-dev.apk RevolutionMacro-Android-v0.2.7-dev.apk
+
+      - name: Upload final APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevolutionMacro-Android-v0.2.7-dev
+          path: RevolutionMacro-Android-v0.2.7-dev.apk
+          if-no-files-found: error
+
+      - name: Publish emulator-gated APK race-safely
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/RevolutionMacro-Android-v0.2.7-dev.apk RevolutionMacro-Android-v0.2.7-dev.apk
+            cp /tmp/SHA256SUMS-v027.txt SHA256SUMS.txt
+            git add RevolutionMacro-Android-v0.2.7-dev.apk SHA256SUMS.txt
+            if git diff --cached --quiet; then exit 0; fi
+            git commit -m "Publish emulator-gated RevolutionMacro Android v0.2.7 dev APK"
+            if git push origin HEAD:main; then exit 0; fi
+            echo "main moved during publish; retrying"
+          done
+          exit 1
