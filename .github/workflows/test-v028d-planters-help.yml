@@ -103,6 +103,7 @@ jobs:
             sleep 22
             adb exec-out screencap -p > emulator-artifacts/revo-v028d.png
             adb logcat -d -v time > emulator-artifacts/logcat-v028d.txt
+            ! grep -q 'RevoV028DProbe ERROR' emulator-artifacts/logcat-v028d.txt
             grep 'RevoV028DProbe {' emulator-artifacts/logcat-v028d.txt | tail -n1 > emulator-artifacts/probe.txt
             cat emulator-artifacts/probe.txt
             grep -q '"backend":"0.2.8.1"' emulator-artifacts/probe.txt
