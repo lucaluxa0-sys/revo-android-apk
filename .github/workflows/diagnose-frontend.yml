@@ -85,3 +85,59 @@ jobs:
               exists=(root/r.lstrip('/')).exists()
               print(('OK      ' if exists else 'MISSING ') + r)
           PY
+
+      - name: Map embedded PNG blobs to frontend filenames
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, struct, zlib, hashlib
+          exe = Path('.cache/RevolutionMacro.exe').read_bytes()
+          js = Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
+          refs = sorted(set(re.findall(r'/?assets/([A-Za-z0-9_\-]+\.png)', js)))
+          sig = b'\x89PNG\r\n\x1a\n'
+          pngs=[]
+          pos=0
+          while True:
+              s=exe.find(sig,pos)
+              if s<0: break
+              p=s+8
+              ok=True
+              while p+12<=len(exe):
+                  ln=struct.unpack('>I',exe[p:p+4])[0]
+                  typ=exe[p+4:p+8]
+                  end=p+12+ln
+                  if end>len(exe): ok=False; break
+                  p=end
+                  if typ==b'IEND': break
+              if ok and p<=len(exe) and exe[p-(12):p-8]==b'\x00\x00\x00\x00' and exe[p-8:p-4]==b'IEND':
+                  pngs.append((s,p,exe[s:p]))
+                  pos=p
+              else:
+                  pos=s+8
+          print(f'PNG_COUNT={len(pngs)} REF_COUNT={len(refs)}')
+          for name in refs[:]:
+              needle=name.encode()
+              hits=[]; q=0
+              while True:
+                  i=exe.find(needle,q)
+                  if i<0: break
+                  hits.append(i); q=i+1
+              nearest=[]
+              for h in hits:
+                  for idx,(s,e,b) in enumerate(pngs):
+                      d=min(abs(s-h),abs(e-h))
+                      if d<250000:
+                          nearest.append((d,idx,s,e,len(b)))
+              nearest.sort()
+              if hits:
+                  print('NAME',name,'HITS',hits[:8],'NEAREST',nearest[:5])
+          # Print PNG metadata and short hashes to see if blobs form an ordered resource table.
+          print('===== PNG BLOBS =====')
+          for idx,(s,e,b) in enumerate(pngs):
+              try:
+                  w,h=struct.unpack('>II',b[16:24])
+              except Exception:
+                  w=h=-1
+              print(idx,s,e,len(b),f'{w}x{h}',hashlib.sha256(b).hexdigest()[:16])
+          PY
