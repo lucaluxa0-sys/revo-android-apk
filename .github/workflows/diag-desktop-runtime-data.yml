@@ -27,20 +27,29 @@ jobs:
           if ($sha -ne '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb') { throw "SHA mismatch: $sha" }
           Write-Host "PASS exact EXE $sha"
 
-      - name: Launch current Revo and allow backend initialization
+      - name: Launch Revo and wait for its real Storage config
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
+          $ErrorActionPreference = 'Stop'
           $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
           $p = Start-Process -FilePath $exe -PassThru
-          Write-Host "PID=$($p.Id)"
-          Start-Sleep -Seconds 30
-          if (-not $p.HasExited) {
-            Write-Host 'Revo still alive after 30s; backend initialized.'
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          } else {
-            Write-Host "Revo exited code=$($p.ExitCode)"
+          $p.Id | Set-Content (Join-Path $env:RUNNER_TEMP 'revo-pid.txt')
+          Write-Host "Started PID=$($p.Id)"
+
+          $found = $null
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            $found = Get-ChildItem $env:APPDATA -Filter config.yaml -File -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '(?i)\\revolution\\.*\\Storage\\config\.yaml$' } |
+              Select-Object -First 1
+            if ($found) {
+              Write-Host "Found config after $((($i + 1) * 2))s: $($found.FullName)"
+              break
+            }
+            if (($i + 1) % 10 -eq 0) { Write-Host "Still waiting for Revo Storage... $((($i + 1) * 2))s" }
           }
+          if (-not $found) { throw 'Revo did not create Storage/config.yaml within 120 seconds.' }
+          $found.DirectoryName | Set-Content (Join-Path $env:RUNNER_TEMP 'revo-storage-path.txt')
 
       - name: Capture exact Revolution Storage and userpatterns
         shell: pwsh
@@ -48,14 +57,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-
-          $storage = Join-Path $env:APPDATA 'revolution\0.9c\Storage'
+          $storage = (Get-Content (Join-Path $env:RUNNER_TEMP 'revo-storage-path.txt') -Raw).Trim()
           Write-Host "Storage path: $storage"
-          if (-not (Test-Path $storage)) {
-            Write-Host 'Nearby revolution directories:'
-            Get-ChildItem (Join-Path $env:APPDATA 'revolution') -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue | Select-Object FullName,Length | Format-Table -AutoSize
-            throw 'Expected Revolution Storage directory was not created.'
-          }
 
           foreach ($name in @('config.yaml','settings.yaml','accounts.yaml','planters.yaml')) {
             $src = Join-Path $storage $name
@@ -70,9 +73,10 @@ jobs:
 
           $up = Join-Path $env:USERPROFILE '.revolution-macro\userpatterns'
           if (Test-Path $up) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $out 'userpatterns') | Out-Null
+            $upOut = Join-Path $out 'userpatterns'
+            New-Item -ItemType Directory -Force -Path $upOut | Out-Null
             Get-ChildItem $up -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $out 'userpatterns') -Force
+              Copy-Item -LiteralPath $_.FullName -Destination $upOut -Force
               Write-Host "USERPATTERN $($_.Name) bytes=$($_.Length)"
             }
           }
@@ -90,9 +94,16 @@ jobs:
               ForEach-Object { $_.ToString() }
           }
 
+      - name: Stop Revo
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process RevolutionMacro -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
       - name: Upload exact runtime data
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: revolution-desktop-runtime-data-exact
           path: ${{ runner.temp }}/revo-runtime-data-exact/
-          if-no-files-found: error
+          if-no-files-found: warn
