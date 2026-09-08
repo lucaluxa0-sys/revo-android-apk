@@ -1,0 +1,33 @@
+name: Diagnose pinned Revo v8 pattern dataset
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-current-pattern-dataset.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and inspect pinned pattern dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/patterns.bin \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro/v0.9c-hotfix3/datasets/v8/patterns.bin
+          sha256sum /tmp/patterns.bin
+          wc -c /tmp/patterns.bin
+          file /tmp/patterns.bin
+          echo '--- first 256 bytes ---'
+          xxd -l 256 /tmp/patterns.bin
+          echo '--- strings mentioning movement/patterns ---'
+          strings -n 4 /tmp/patterns.bin | grep -Ei 'walk|pattern|forward|backward|left|right|gather|snake|corner|spiral|width|length|distance|lua' | head -n 200 || true
+          echo '--- printable strings head ---'
+          strings -n 4 /tmp/patterns.bin | head -n 200 || true
