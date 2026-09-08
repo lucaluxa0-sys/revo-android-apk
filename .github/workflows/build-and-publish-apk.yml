@@ -75,29 +75,49 @@ jobs:
         shell: bash
         run: gradle -p revo-android --stacktrace :app:assembleDebug
 
-      - name: Publish APK into repository
+      - name: Stage APK for publication
         shell: bash
         run: |
           APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
-          cp "$APK" RevolutionMacro-Android-v0.2.5-dev.apk
-          sha256sum RevolutionMacro-Android-v0.2.5-dev.apk > SHA256SUMS.txt
+          cp "$APK" /tmp/RevolutionMacro-Android-v0.2.5-dev.apk
+          sha256sum /tmp/RevolutionMacro-Android-v0.2.5-dev.apk | sed 's#/tmp/##' > /tmp/SHA256SUMS.txt
+          cp /tmp/RevolutionMacro-Android-v0.2.5-dev.apk RevolutionMacro-Android-v0.2.5-dev.apk
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add RevolutionMacro-Android-v0.2.5-dev.apk SHA256SUMS.txt
-          if git diff --cached --quiet; then
-            echo "APK already up to date"
-          else
-            git commit -m "Publish RevolutionMacro Android v0.2.5 dev APK"
-            git fetch origin main
-            git rebase origin/main
-            git push origin HEAD:main
-          fi
-
-      - name: Upload build artifact too
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: RevolutionMacro-Android-v0.2.5-dev
           path: RevolutionMacro-Android-v0.2.5-dev.apk
           if-no-files-found: error
+
+      - name: Publish APK into repository race-safely
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3 4; do
+            echo "publish attempt $attempt"
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/RevolutionMacro-Android-v0.2.5-dev.apk RevolutionMacro-Android-v0.2.5-dev.apk
+            cp /tmp/SHA256SUMS.txt SHA256SUMS.txt
+            git add RevolutionMacro-Android-v0.2.5-dev.apk SHA256SUMS.txt
+
+            if git diff --cached --quiet; then
+              echo "APK already up to date on main"
+              exit 0
+            fi
+
+            git commit -m "Publish RevolutionMacro Android v0.2.5 dev APK"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+
+            echo "main moved during publish; retrying from latest main"
+          done
+
+          echo "Failed to publish APK after retries" >&2
+          exit 1
