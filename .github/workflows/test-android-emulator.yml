@@ -1,0 +1,129 @@
+name: Test Revo Android in emulator
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patches/**'
+      - '.github/workflows/test-android-emulator.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
+          unzip -q /tmp/revo-android-source.zip
+          test -f revo-android/app/build.gradle.kts
+
+      - name: Download exact Revolution Macro release
+        shell: bash
+        run: |
+          mkdir -p .cache
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+
+      - name: Extract Revo frontend and apply v0.2.3 runtime fix
+        shell: bash
+        run: |
+          mkdir -p revo-android/app/src/main/assets/www
+          python3 revo-android/extract_revo_frontend.py \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html \
+             revo-android/app/src/main/assets/www/index.html
+          cp patches/android-wails-shim-v0.2.3.js \
+             revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Add diagnostic WebView logging
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+          s = s.replace(
+              'web.loadUrl("https://revo.local/index.android.html");',
+              '''web.loadUrl("https://revo.local/index.android.html");\n        new Handler(Looper.getMainLooper()).postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({ready:document.readyState,body:(document.body&&document.body.innerText||'').slice(0,1200),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,go:typeof window.go})",\n                value -> Log.e("RevoProbe", String.valueOf(value)));\n        }, 12000);''')
+          p.write_text(s)
+          PY
+
+      - name: Build diagnostic APK
+        shell: bash
+        run: gradle -p revo-android --stacktrace :app:assembleDebug
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot emulator and test app
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euxo pipefail
+            mkdir -p emulator-artifacts
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 16
+            adb exec-out screencap -p > emulator-artifacts/revo-screen.png
+            adb shell uiautomator dump /sdcard/revo-window.xml || true
+            adb pull /sdcard/revo-window.xml emulator-artifacts/revo-window.xml || true
+            adb logcat -d -v time > emulator-artifacts/logcat.txt
+            grep -E 'RevoWeb|RevoProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
+            cat emulator-artifacts/revo-log.txt
+            grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat.txt
+            grep -q 'RevoProbe' emulator-artifacts/logcat.txt
+            if grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
+              echo 'FAIL: boot screen is still visible after 12 seconds'
+              exit 1
+            fi
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-android-emulator-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
