@@ -25,6 +25,14 @@ if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
 
+# Target the actual right-sidebar opener rather than relying on visible text. This
+# avoids stale/duplicate text matches after Planter Studio onboarding rerenders.
+old_auto_opener = '''e.jsx(pe,{onClick:()=>y(!0),fullWidth:!0,size:"xs",leftSection:e.jsx(Ia,{size:14}),styles:{inner:{justifyContent:"flex-start",width:"100%"},label:{flex:1,justifyContent:"center",paddingRight:"2px",fontSize:"11px",width:"100%"}},children:"Auto-Planters"})'''
+new_auto_opener = '''e.jsx(pe,{"aria-label":"Open Auto-Planters",onClick:()=>y(!0),fullWidth:!0,size:"xs",leftSection:e.jsx(Ia,{size:14}),styles:{inner:{justifyContent:"flex-start",width:"100%"},label:{flex:1,justifyContent:"center",paddingRight:"2px",fontSize:"11px",width:"100%"}},children:"Auto-Planters"})'''
+if old_auto_opener not in s:
+    raise SystemExit("v0.2.8 Auto-Planters opener target not found; refusing unsafe patch")
+s = s.replace(old_auto_opener, new_auto_opener, 1)
+
 # Desktop Revo sends Automatic users through a multi-step Planter Studio tutorial.
 # On Android that tutorial can remain as a full-screen grey blocker because its
 # desktop interaction assumptions do not map cleanly to touch. Preserve the mode
@@ -37,10 +45,9 @@ if old_planter_intro not in s:
 s = s.replace(old_planter_intro, new_planter_intro, 1)
 
 # Older build/test workflows use this exact literal as a static patch marker.
-# Keep it in a comment so those gates remain compatible while the actual title
-# is now a React node containing our explicit Android close control.
 s += '\n/* android-auto-planters-patch-marker title:"Auto-Planters" */\n'
 s += '/* android-planter-studio-mobile-complete */\n'
+s += '/* android-auto-planters-opener Open Auto-Planters */\n'
 
 p.write_text(s, encoding="utf-8")
-print("PASS: patched Revo tap-help, Auto-Planters close, and Planter Studio mobile onboarding")
+print("PASS: patched tap-help, exact Auto-Planters opener/close, and Planter Studio mobile onboarding")
