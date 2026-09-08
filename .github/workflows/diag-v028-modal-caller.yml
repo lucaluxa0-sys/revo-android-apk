@@ -1,4 +1,4 @@
-name: Diagnose Revo Auto-Planters modal caller
+name: Diagnose Revo Auto-Planters panel render
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Extract exact frontend caller context
+      - name: Extract exact Auto-Planters panel context
         shell: bash
         run: |
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
@@ -29,15 +29,14 @@ jobs:
           from pathlib import Path
           import sys
           s=Path(sys.argv[1]).read_text(errors='ignore')
-          terms=['e.jsx(ay', 'e.jsxs(ay', 'children:"Auto-Planters"', 'onClick:()=>y(!0)', 'function ay', 'ay=({open']
-          for term in terms:
+          for term in ['Z1=', 'ey=', 'ny=', 'sy=', 'ay=({open']:
               print('\n===== TERM',term,'=====')
               p=0
               while True:
                   i=s.find(term,p)
                   if i<0: break
                   print('OFFSET',i)
-                  print(s[max(0,i-5000):min(len(s),i+7000)])
+                  print(s[max(0,i-2500):min(len(s),i+12000)])
                   print('\n---')
                   p=i+len(term)
           PY
