@@ -25,10 +25,22 @@ if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
 
+# Desktop Revo sends Automatic users through a multi-step Planter Studio tutorial.
+# On Android that tutorial can remain as a full-screen grey blocker because its
+# desktop interaction assumptions do not map cleanly to touch. Preserve the mode
+# choice, but finish onboarding immediately. The parent onClose marks
+# planters.introShowed=true, which is already persisted by the Android runtime.
+old_planter_intro = '''p=S=>{S==="automatic"?(o.Object("planter").Object("autoPlanters").Set("enabled",!0),i(!0)):t()},h=()=>{t()};return n?e.jsx'''
+new_planter_intro = '''p=S=>{o.Object("planter").Object("autoPlanters").Set("enabled",S==="automatic"),t()},h=()=>{t()};return n?e.jsx'''
+if old_planter_intro not in s:
+    raise SystemExit("v0.2.8 Planter Studio onboarding target not found; refusing unsafe patch")
+s = s.replace(old_planter_intro, new_planter_intro, 1)
+
 # Older build/test workflows use this exact literal as a static patch marker.
 # Keep it in a comment so those gates remain compatible while the actual title
 # is now a React node containing our explicit Android close control.
 s += '\n/* android-auto-planters-patch-marker title:"Auto-Planters" */\n'
+s += '/* android-planter-studio-mobile-complete */\n'
 
 p.write_text(s, encoding="utf-8")
-print("PASS: patched Revo tap-help and Auto-Planters with local+parent close state")
+print("PASS: patched Revo tap-help, Auto-Planters close, and Planter Studio mobile onboarding")
