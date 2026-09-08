@@ -1,4 +1,4 @@
-name: Diagnose Revo frontend compatibility
+name: Diagnose Revo Android internals
 
 on:
   workflow_dispatch:
@@ -16,128 +16,45 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - name: Restore Android source
         shell: bash
         run: |
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
           unzip -q /tmp/revo-android-source.zip
-
-      - name: Show Android source paths relevant to asset serving
+      - name: Print Android implementation
         shell: bash
         run: |
-          echo '===== extract_revo_frontend.py ====='
-          sed -n '1,260p' revo-android/extract_revo_frontend.py
-          echo '===== MainActivity.java ====='
-          sed -n '1,360p' revo-android/app/src/main/java/com/revolution/android/MainActivity.java
-
-      - name: Download exact Revolution Macro release
+          for f in \
+            revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java \
+            revo-android/app/src/main/java/com/revolution/android/MacroEngine.java \
+            revo-android/app/src/main/java/com/revolution/android/MacroEngineRegistry.java \
+            revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java \
+            revo-android/app/src/main/java/com/revolution/android/LocalAssetWebViewClient.java \
+            revo-android/app/src/main/AndroidManifest.xml \
+            revo-android/app/src/main/assets/www/index.android.html; do
+            echo "===== $f ====="
+            sed -n '1,420p' "$f"
+          done
+      - name: Download and extract exact frontend
         shell: bash
         run: |
-          mkdir -p .cache
-          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+          curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
-          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
-
-      - name: Extract frontend
-        shell: bash
-        run: |
           mkdir -p /tmp/www
-          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/www
-          echo '===== EXTRACTED FILES ====='
-          find /tmp/www -type f -printf '%P\n' | sort
-
-      - name: Trace field-add calls and image URLs
+          python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
+      - name: Trace dataRuntime, gather fields, logs and start state
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
-          root = Path('/tmp/www')
-          texts = []
-          for p in root.rglob('*'):
-              if p.is_file() and p.suffix.lower() in {'.js','.html','.css','.json'}:
-                  try: texts.append((p, p.read_text(errors='ignore')))
-                  except Exception: pass
-
-          terms = ['AddDefaultField','DeleteField','5 Bee Zone','Sunflower Field','Field Defaults','defaultFields']
-          for term in terms:
-              print(f'===== TERM {term!r} =====')
-              found = False
-              for p,s in texts:
-                  start = 0
-                  while True:
-                      i = s.find(term, start)
-                      if i < 0: break
-                      found = True
-                      a=max(0,i-900); b=min(len(s),i+1600)
-                      print(f'--- {p.relative_to(root)} @ {i} ---')
-                      print(s[a:b].replace('\n',' '))
-                      start=i+len(term)
-              if not found: print('NOT FOUND')
-
-          print('===== IMAGE-LIKE REFERENCES =====')
-          refs=set()
-          pat=re.compile(r'''["']([^"']+\.(?:png|jpe?g|webp|gif|svg|ico))(?:\?[^"']*)?["']''',re.I)
-          for p,s in texts:
-              for m in pat.finditer(s): refs.add(m.group(1))
-          for r in sorted(refs):
-              exists=(root/r.lstrip('/')).exists()
-              print(('OK      ' if exists else 'MISSING ') + r)
-          PY
-
-      - name: Map embedded PNG blobs to frontend filenames
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re, struct, zlib, hashlib
-          exe = Path('.cache/RevolutionMacro.exe').read_bytes()
-          js = Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
-          refs = sorted(set(re.findall(r'/?assets/([A-Za-z0-9_\-]+\.png)', js)))
-          sig = b'\x89PNG\r\n\x1a\n'
-          pngs=[]
-          pos=0
-          while True:
-              s=exe.find(sig,pos)
-              if s<0: break
-              p=s+8
-              ok=True
-              while p+12<=len(exe):
-                  ln=struct.unpack('>I',exe[p:p+4])[0]
-                  typ=exe[p+4:p+8]
-                  end=p+12+ln
-                  if end>len(exe): ok=False; break
-                  p=end
-                  if typ==b'IEND': break
-              if ok and p<=len(exe) and exe[p-(12):p-8]==b'\x00\x00\x00\x00' and exe[p-8:p-4]==b'IEND':
-                  pngs.append((s,p,exe[s:p]))
-                  pos=p
-              else:
-                  pos=s+8
-          print(f'PNG_COUNT={len(pngs)} REF_COUNT={len(refs)}')
-          for name in refs[:]:
-              needle=name.encode()
-              hits=[]; q=0
-              while True:
-                  i=exe.find(needle,q)
+          s=Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
+          for term in ['dataRuntime','AddDefaultField(','DeleteField(','logs','Logs','macroLog','activityLog','Start(','startup:done','state.running','running','fieldConfigs','gather.fields']:
+              print('\n===== '+term+' =====')
+              pos=0; n=0
+              while n<8:
+                  i=s.find(term,pos)
                   if i<0: break
-                  hits.append(i); q=i+1
-              nearest=[]
-              for h in hits:
-                  for idx,(s,e,b) in enumerate(pngs):
-                      d=min(abs(s-h),abs(e-h))
-                      if d<250000:
-                          nearest.append((d,idx,s,e,len(b)))
-              nearest.sort()
-              if hits:
-                  print('NAME',name,'HITS',hits[:8],'NEAREST',nearest[:5])
-          # Print PNG metadata and short hashes to see if blobs form an ordered resource table.
-          print('===== PNG BLOBS =====')
-          for idx,(s,e,b) in enumerate(pngs):
-              try:
-                  w,h=struct.unpack('>II',b[16:24])
-              except Exception:
-                  w=h=-1
-              print(idx,s,e,len(b),f'{w}x{h}',hashlib.sha256(b).hexdigest()[:16])
+                  print(s[max(0,i-1300):min(len(s),i+2600)].replace('\n',' '))
+                  print('\n---')
+                  pos=i+len(term); n+=1
           PY
