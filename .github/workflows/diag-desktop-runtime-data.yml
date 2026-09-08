@@ -1,0 +1,97 @@
+name: Diagnose current desktop Revolution runtime data
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-runtime-data.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact public Revolution Macro release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe' -OutFile $exe
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb') { throw "SHA mismatch: $sha" }
+          Write-Host "PASS exact EXE $sha"
+
+      - name: Launch current Revo and allow backend initialization
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
+          $p = Start-Process -FilePath $exe -PassThru
+          Write-Host "PID=$($p.Id)"
+          for ($i=0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) { Write-Host "Exited code=$($p.ExitCode) at ${i}s"; break }
+          }
+          if (-not $p.HasExited) {
+            Write-Host 'Revo still alive after 30s; backend had time to initialize.'
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Locate Revolution config, pattern, and state files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $roots = @($env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE, $env:TEMP) | Select-Object -Unique
+          $rows = New-Object System.Collections.Generic.List[object]
+          foreach ($root in $roots) {
+            if (-not (Test-Path $root)) { continue }
+            Write-Host "===== SCAN $root ====="
+            Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.FullName -match '(?i)revolution|patterns|settings\.ya?ml|planters\.ya?ml|accounts\.ya?ml|config\.ya?ml'
+              } |
+              ForEach-Object {
+                $rows.Add([pscustomobject]@{FullName=$_.FullName; Length=if($_.PSIsContainer){0}else{$_.Length}; Directory=$_.PSIsContainer})
+              }
+          }
+          $rows | Sort-Object FullName -Unique | Format-Table -AutoSize | Out-String -Width 300 | Tee-Object -FilePath (Join-Path $out 'file-list.txt')
+
+          # Copy only small/relevant runtime material; never copy browser/profile caches wholesale.
+          $files = $rows | Where-Object { -not $_.Directory -and $_.Length -le 5MB } | Sort-Object FullName -Unique
+          $n = 0
+          foreach ($r in $files) {
+            if (-not (Test-Path -LiteralPath $r.FullName -PathType Leaf)) { continue }
+            $name = ('{0:D4}_{1}' -f $n, ([IO.Path]::GetFileName($r.FullName)))
+            Copy-Item -LiteralPath $r.FullName -Destination (Join-Path $out $name) -Force -ErrorAction SilentlyContinue
+            "${name}`t$($r.FullName)" | Add-Content -Path (Join-Path $out 'copy-map.txt')
+            $n++
+          }
+          Write-Host "Copied $n relevant small files."
+
+      - name: Print readable config and pattern files
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data'
+          Get-ChildItem $out -File -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Extension -match '(?i)\.ya?ml|\.json|\.txt|\.lua' -or $_.Name -match '(?i)pattern|settings|config|account|planter') {
+              Write-Host "===== $($_.Name) ====="
+              try { Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop | Select-Object -First 1 } catch { Write-Host "[binary/unreadable]" }
+            }
+          }
+
+      - name: Upload captured runtime data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-desktop-runtime-data
+          path: ${{ runner.temp }}/revo-runtime-data/
+          if-no-files-found: warn
