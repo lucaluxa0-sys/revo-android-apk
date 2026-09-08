@@ -1,1 +1,1 @@
-a01f15ec18d7fe06ac4d67876d7993a7cb9db1b8f357a79dd47d5c969f0df2cd  RevolutionMacro-Android-v0.2.3-dev.apk
+002470d8ebfa3be0fe25a685eca7900d28503053e19c76775ca1bcb025b79db5  RevolutionMacro-Android-v0.2.4-dev.apk
