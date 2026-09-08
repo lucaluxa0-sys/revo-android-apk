@@ -49,13 +49,13 @@ jobs:
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
 
-      - name: Extract Revo frontend and apply v0.2.3 runtime fix
+      - name: Extract Revo frontend and apply v0.2.4 runtime fix
         shell: bash
         run: |
           mkdir -p revo-android/app/src/main/assets/www
           python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
           cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
-          cp patches/android-wails-shim-v0.2.3.js revo-android/app/src/main/assets/www/android-wails-shim.js
+          cp patches/android-wails-shim-v0.2.4.js revo-android/app/src/main/assets/www/android-wails-shim.js
 
       - name: Add WebView-native diagnostic probes
         shell: bash
@@ -70,7 +70,7 @@ jobs:
               '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
           s = s.replace(
               'web.loadUrl("https://revo.local/index.android.html");',
-              '''web.loadUrl("https://revo.local/index.android.html");\n        Handler probeHandler = new Handler(Looper.getMainLooper());\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({ready:document.readyState,body:(document.body&&document.body.innerText||'').slice(0,1600),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,go:typeof window.go})",\n                value -> Log.e("RevoProbe", String.valueOf(value)));\n        }, 12000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Disable');if(!b)return 'not-found';b.click();return 'clicked';})()",\n                value -> Log.e("RevoDismiss", String.valueOf(value)));\n        }, 14000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({body:(document.body&&document.body.innerText||'').slice(0,1600),buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||x.textContent||'').trim()).filter(Boolean).slice(0,30)})",\n                value -> Log.e("RevoMainProbe", String.valueOf(value)));\n        }, 18000);''')
+              '''web.loadUrl("https://revo.local/index.android.html");\n        Handler probeHandler = new Handler(Looper.getMainLooper());\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({ready:document.readyState,body:(document.body&&document.body.innerText||'').slice(0,1600),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,go:typeof window.go})",\n                value -> Log.e("RevoProbe", String.valueOf(value)));\n        }, 12000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Disable');if(!b)return 'not-found';b.click();return 'clicked';})()",\n                value -> Log.e("RevoDismiss", String.valueOf(value)));\n        }, 14000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({body:(document.body&&document.body.innerText||'').slice(0,1600),buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||x.textContent||'').trim()).filter(Boolean).slice(0,30)})",\n                value -> Log.e("RevoMainProbe", String.valueOf(value)));\n        }, 18000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const rt=window.dataRuntime;if(!rt)return JSON.stringify({error:'no-dataRuntime'});const p=rt.presetObject('Default');const phase=localStorage.getItem('__revo_v024_probe_written');if(!phase){p.Set('androidPersistProbe','persist-v024');localStorage.setItem('__revo_v024_probe_written','1');return JSON.stringify({phase:'write',value:p.Concrete('androidPersistProbe'),disconnected:rt.disconnected});}return JSON.stringify({phase:'reload',value:p.Concrete('androidPersistProbe'),disconnected:rt.disconnected,persistedOps:(window.RevoAndroidDebug&&window.RevoAndroidDebug.persistedOps?window.RevoAndroidDebug.persistedOps().length:-1)});}catch(e){return JSON.stringify({error:String(e),stack:e&&e.stack});}})()",\n                value -> Log.e("RevoPersistenceProbe", String.valueOf(value)));\n        }, 19000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const rt=window.dataRuntime;const p=rt.presetObject('Default');return JSON.stringify({value:p.Concrete('androidPersistProbe'),disconnected:rt.disconnected,persistedOps:(window.RevoAndroidDebug&&window.RevoAndroidDebug.persistedOps?window.RevoAndroidDebug.persistedOps().length:-1),body:(document.body&&document.body.innerText||'').slice(0,500)});}catch(e){return JSON.stringify({error:String(e)});}})()",\n                value -> Log.e("RevoAckProbe", String.valueOf(value)));\n        }, 25500);''')
           p.write_text(s)
           PY
 
@@ -85,7 +85,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
 
-      - name: Boot emulator and test WebView
+      - name: Boot emulator and test WebView, ACK, and persistence
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -98,30 +98,46 @@ jobs:
             set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+
+            # First boot: mutate a real Revo preset field and wait beyond the 5s disconnect deadline.
             adb logcat -c
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
-            sleep 22
-            adb shell input tap 400 1380 || true
-            sleep 1
-            adb exec-out screencap -p > emulator-artifacts/revo-main-screen.png
-            adb logcat -d -v time > emulator-artifacts/logcat.txt
-            grep -E 'RevoWeb|RevoProbe|RevoDismiss|RevoMainProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
-            cat emulator-artifacts/revo-log.txt
-            grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat.txt
-            grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
-            grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
-            test "$(grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -c 'Starting Revolution Macro' || true)" -eq 0
-            grep 'RevoDismiss' emulator-artifacts/logcat.txt | grep -q 'clicked'
-            grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
-            grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
-            test "$(grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -c 'Starting Revolution Macro' || true)" -eq 0
-            echo 'PASS: Revo Android reached interactive WebView UI and accepted first-run interaction'
+            sleep 29
+            adb exec-out screencap -p > emulator-artifacts/revo-main-screen-first.png
+            adb logcat -d -v time > emulator-artifacts/logcat-first.txt
+            grep -E 'RevoWeb|RevoProbe|RevoDismiss|RevoMainProbe|RevoPersistenceProbe|RevoAckProbe|android-runtime|preload|startup' emulator-artifacts/logcat-first.txt > emulator-artifacts/revo-log-first.txt || true
+            cat emulator-artifacts/revo-log-first.txt
+            grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat-first.txt
+            grep 'RevoProbe' emulator-artifacts/logcat-first.txt | grep -q 'Gather'
+            grep 'RevoProbe' emulator-artifacts/logcat-first.txt | grep -q 'Start'
+            grep 'RevoPersistenceProbe' emulator-artifacts/logcat-first.txt | grep -q '\\"phase\\":\\"write\\"'
+            grep 'RevoPersistenceProbe' emulator-artifacts/logcat-first.txt | grep -q 'persist-v024'
+            grep 'RevoAckProbe' emulator-artifacts/logcat-first.txt | grep -q '\\"disconnected\\":false'
+            grep 'RevoAckProbe' emulator-artifacts/logcat-first.txt | grep -q 'persist-v024'
+            test "$(grep 'RevoAckProbe' emulator-artifacts/logcat-first.txt | grep -c 'Connecting to Backend' || true)" -eq 0
+            grep '\[android-runtime\] persisted runtime ops=' emulator-artifacts/logcat-first.txt
+
+            # Second boot: no mutation is performed; the value must come back from the saved runtime snapshot.
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 29
+            adb exec-out screencap -p > emulator-artifacts/revo-main-screen-reload.png
+            adb logcat -d -v time > emulator-artifacts/logcat-reload.txt
+            grep -E 'RevoWeb|RevoPersistenceProbe|RevoAckProbe|android-runtime|preload|startup' emulator-artifacts/logcat-reload.txt > emulator-artifacts/revo-log-reload.txt || true
+            cat emulator-artifacts/revo-log-reload.txt
+            grep '\[android-runtime\] loaded persisted runtime ops=' emulator-artifacts/logcat-reload.txt
+            grep 'RevoPersistenceProbe' emulator-artifacts/logcat-reload.txt | grep -q '\\"phase\\":\\"reload\\"'
+            grep 'RevoPersistenceProbe' emulator-artifacts/logcat-reload.txt | grep -q 'persist-v024'
+            grep 'RevoAckProbe' emulator-artifacts/logcat-reload.txt | grep -q '\\"disconnected\\":false'
+            test "$(grep 'RevoAckProbe' emulator-artifacts/logcat-reload.txt | grep -c 'Connecting to Backend' || true)" -eq 0
+            echo 'PASS: Revo Android UI stayed connected beyond 5s and persisted a real preset mutation across process restart'
 
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: revo-android-emulator-evidence
+          name: revo-android-v0.2.4-emulator-evidence
           path: emulator-artifacts/
           if-no-files-found: warn
