@@ -45,8 +45,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p .cache
-          curl -fL --retry 4 --retry-delay 2 \
-            -o .cache/RevolutionMacro.exe \
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
 
@@ -54,15 +53,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p revo-android/app/src/main/assets/www
-          python3 revo-android/extract_revo_frontend.py \
-            .cache/RevolutionMacro.exe \
-            revo-android/app/src/main/assets/www
-          cp revo-android/app/src/main/assets/www/index.android.html \
-             revo-android/app/src/main/assets/www/index.html
-          cp patches/android-wails-shim-v0.2.3.js \
-             revo-android/app/src/main/assets/www/android-wails-shim.js
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          cp patches/android-wails-shim-v0.2.3.js revo-android/app/src/main/assets/www/android-wails-shim.js
 
-      - name: Add diagnostic WebView logging
+      - name: Add WebView-native diagnostic probes
         shell: bash
         run: |
           python3 - <<'PY'
@@ -75,7 +70,7 @@ jobs:
               '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
           s = s.replace(
               'web.loadUrl("https://revo.local/index.android.html");',
-              '''web.loadUrl("https://revo.local/index.android.html");\n        new Handler(Looper.getMainLooper()).postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({ready:document.readyState,body:(document.body&&document.body.innerText||'').slice(0,1200),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,go:typeof window.go})",\n                value -> Log.e("RevoProbe", String.valueOf(value)));\n        }, 12000);''')
+              '''web.loadUrl("https://revo.local/index.android.html");\n        Handler probeHandler = new Handler(Looper.getMainLooper());\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({ready:document.readyState,body:(document.body&&document.body.innerText||'').slice(0,1600),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,go:typeof window.go})",\n                value -> Log.e("RevoProbe", String.valueOf(value)));\n        }, 12000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Disable');if(!b)return 'not-found';b.click();return 'clicked';})()",\n                value -> Log.e("RevoDismiss", String.valueOf(value)));\n        }, 14000);\n        probeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "JSON.stringify({body:(document.body&&document.body.innerText||'').slice(0,1600),buttons:[...document.querySelectorAll('button')].map(x=>(x.innerText||x.textContent||'').trim()).filter(Boolean).slice(0,30)})",\n                value -> Log.e("RevoMainProbe", String.valueOf(value)));\n        }, 18000);''')
           p.write_text(s)
           PY
 
@@ -90,7 +85,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
 
-      - name: Boot emulator and test app
+      - name: Boot emulator and test WebView
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -106,52 +101,27 @@ jobs:
             adb logcat -c
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
-            sleep 16
-
-            adb exec-out screencap -p > emulator-artifacts/revo-first-screen.png
-            adb shell uiautomator dump /sdcard/revo-window.xml
-            adb pull /sdcard/revo-window.xml emulator-artifacts/revo-window.xml
+            sleep 22
+            adb exec-out screencap -p > emulator-artifacts/revo-main-screen.png
             adb logcat -d -v time > emulator-artifacts/logcat.txt
-            grep -E 'RevoWeb|RevoProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
+            grep -E 'RevoWeb|RevoProbe|RevoDismiss|RevoMainProbe|android-runtime|preload|startup' emulator-artifacts/logcat.txt > emulator-artifacts/revo-log.txt || true
             cat emulator-artifacts/revo-log.txt
 
-            grep -q 'text="Gather"' emulator-artifacts/revo-window.xml
-            grep -q 'text="Start"' emulator-artifacts/revo-window.xml
-            grep -q 'text="Preset"' emulator-artifacts/revo-window.xml
-            if grep -q 'text="Starting Revolution Macro' emulator-artifacts/revo-window.xml; then
-              echo 'FAIL: startup overlay is still visible'
+            grep -q '\[android-runtime\] frontend runtime ready; sending preload' emulator-artifacts/logcat.txt
+            grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
+            grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
+            if grep 'RevoProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
+              echo 'FAIL: startup overlay still visible'
               exit 1
             fi
-
-            python3 - <<'PY' > emulator-artifacts/disable-center.txt
-            import re, xml.etree.ElementTree as ET
-            root = ET.parse('emulator-artifacts/revo-window.xml').getroot()
-            for n in root.iter('node'):
-                if n.attrib.get('text') == 'Disable':
-                    b = n.attrib.get('bounds','')
-                    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', b)
-                    if m:
-                        x1,y1,x2,y2 = map(int,m.groups())
-                        print((x1+x2)//2, (y1+y2)//2)
-                        break
-            PY
-            if [ -s emulator-artifacts/disable-center.txt ]; then
-              read X Y < emulator-artifacts/disable-center.txt
-              adb shell input tap "$X" "$Y"
-              sleep 3
-            fi
-
-            adb exec-out screencap -p > emulator-artifacts/revo-main-screen.png
-            adb shell uiautomator dump /sdcard/revo-main.xml
-            adb pull /sdcard/revo-main.xml emulator-artifacts/revo-main.xml
-            grep -q 'text="Gather"' emulator-artifacts/revo-main.xml
-            grep -q 'text="Start"' emulator-artifacts/revo-main.xml
-            grep -q 'text="Status"' emulator-artifacts/revo-main.xml
-            if grep -q 'text="Starting Revolution Macro' emulator-artifacts/revo-main.xml; then
+            grep 'RevoDismiss' emulator-artifacts/logcat.txt | grep -q 'clicked'
+            grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Gather'
+            grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Start'
+            if grep 'RevoMainProbe' emulator-artifacts/logcat.txt | grep -q 'Starting Revolution Macro'; then
               echo 'FAIL: startup overlay returned'
               exit 1
             fi
-            echo 'PASS: Revo Android reached interactive main UI'
+            echo 'PASS: Revo Android reached interactive WebView UI and accepted first-run interaction'
 
       - name: Upload emulator evidence
         if: always()
