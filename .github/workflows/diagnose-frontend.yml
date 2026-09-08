@@ -1,11 +1,9 @@
 name: Diagnose Revo Android internals
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - '.github/workflows/diagnose-frontend.yml'
+    paths: ['.github/workflows/diagnose-frontend.yml']
 
 permissions:
   contents: read
@@ -17,44 +15,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Restore Android source
-        shell: bash
         run: |
-          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
-          unzip -q /tmp/revo-android-source.zip
-      - name: Print Android implementation
-        shell: bash
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/src.zip
+          unzip -q /tmp/src.zip
+      - name: Download exact Revo release
         run: |
-          for f in \
-            revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java \
-            revo-android/app/src/main/java/com/revolution/android/MacroEngine.java \
-            revo-android/app/src/main/java/com/revolution/android/MacroEngineRegistry.java \
-            revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java \
-            revo-android/app/src/main/java/com/revolution/android/LocalAssetWebViewClient.java \
-            revo-android/app/src/main/AndroidManifest.xml \
-            revo-android/app/src/main/assets/www/index.android.html; do
-            echo "===== $f ====="
-            sed -n '1,420p' "$f"
-          done
-      - name: Download and extract exact frontend
-        shell: bash
-        run: |
-          curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe \
-            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          curl -fL --retry 4 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           mkdir -p /tmp/www
           python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
-      - name: Trace dataRuntime, gather fields, logs and start state
-        shell: bash
+      - name: Trace field creation call sites
         run: |
           python3 - <<'PY'
           from pathlib import Path
           s=Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
-          for term in ['dataRuntime','AddDefaultField(','DeleteField(','logs','Logs','macroLog','activityLog','Start(','startup:done','state.running','running','fieldConfigs','gather.fields']:
-              print('\n===== '+term+' =====')
-              pos=0; n=0
-              while n<8:
-                  i=s.find(term,pos)
-                  if i<0: break
-                  print(s[max(0,i-1300):min(len(s),i+2600)].replace('\n',' '))
-                  print('\n---')
-                  pos=i+len(term); n+=1
+          for term in ['Eh(', 'Oh(', 'fields").List', 'Object("fields")', 'List("fields")', 'fieldName', 'gatherField', 'patternName']:
+            print('\n===== '+term+' =====')
+            p=0; c=0
+            while c<15:
+              i=s.find(term,p)
+              if i<0: break
+              print(s[max(0,i-1800):min(len(s),i+3500)].replace('\n',' '))
+              print('\n---')
+              p=i+len(term); c+=1
           PY
+      - name: Inspect executable asset metadata
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          b=Path('/tmp/RevolutionMacro.exe').read_bytes()
+          for name in [b'sunflower-Dk6xbNfW.png',b'bamboo-BpyrWVZ4.png',b'atomic_treat-C1d4jv6O.png']:
+            print('\n====',name.decode(),'====')
+            p=0
+            while True:
+              i=b.find(name,p)
+              if i<0: break
+              print('OFFSET',i)
+              chunk=b[max(0,i-160):i+220]
+              print('HEX',chunk.hex())
+              print('ASCII',''.join(chr(x) if 32<=x<127 else '.' for x in chunk))
+              p=i+1
+          PY
+      - name: Check Go symbols and PE resources
+        run: |
+          echo '===== GO NM ASSET HITS ====='
+          go tool nm /tmp/RevolutionMacro.exe 2>/dev/null | grep -Ei 'sunflower|frontend|asset|icon' | head -100 || true
+          echo '===== RESOURCE TOOLS ====='
+          command -v wrestool || true
+          command -v 7z || true
+          7z l /tmp/RevolutionMacro.exe 2>/dev/null | head -120 || true
