@@ -29,69 +29,70 @@ jobs:
 
       - name: Launch current Revo and allow backend initialization
         shell: pwsh
-        continue-on-error: true
         run: |
           $ErrorActionPreference = 'Continue'
           $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
           $p = Start-Process -FilePath $exe -PassThru
           Write-Host "PID=$($p.Id)"
-          for ($i=0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-            if ($p.HasExited) { Write-Host "Exited code=$($p.ExitCode) at ${i}s"; break }
-          }
+          Start-Sleep -Seconds 30
           if (-not $p.HasExited) {
-            Write-Host 'Revo still alive after 30s; backend had time to initialize.'
+            Write-Host 'Revo still alive after 30s; backend initialized.'
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          } else {
+            Write-Host "Revo exited code=$($p.ExitCode)"
           }
 
-      - name: Locate Revolution config, pattern, and state files
+      - name: Capture exact Revolution Storage and userpatterns
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data'
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $roots = @($env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE, $env:TEMP) | Select-Object -Unique
-          $rows = New-Object System.Collections.Generic.List[object]
-          foreach ($root in $roots) {
-            if (-not (Test-Path $root)) { continue }
-            Write-Host "===== SCAN $root ====="
-            Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.FullName -match '(?i)revolution|patterns|settings\.ya?ml|planters\.ya?ml|accounts\.ya?ml|config\.ya?ml'
-              } |
-              ForEach-Object {
-                $rows.Add([pscustomobject]@{FullName=$_.FullName; Length=if($_.PSIsContainer){0}else{$_.Length}; Directory=$_.PSIsContainer})
-              }
-          }
-          $rows | Sort-Object FullName -Unique | Format-Table -AutoSize | Out-String -Width 300 | Tee-Object -FilePath (Join-Path $out 'file-list.txt')
 
-          # Copy only small/relevant runtime material; never copy browser/profile caches wholesale.
-          $files = $rows | Where-Object { -not $_.Directory -and $_.Length -le 5MB } | Sort-Object FullName -Unique
-          $n = 0
-          foreach ($r in $files) {
-            if (-not (Test-Path -LiteralPath $r.FullName -PathType Leaf)) { continue }
-            $name = ('{0:D4}_{1}' -f $n, ([IO.Path]::GetFileName($r.FullName)))
-            Copy-Item -LiteralPath $r.FullName -Destination (Join-Path $out $name) -Force -ErrorAction SilentlyContinue
-            "${name}`t$($r.FullName)" | Add-Content -Path (Join-Path $out 'copy-map.txt')
-            $n++
+          $storage = Join-Path $env:APPDATA 'revolution\0.9c\Storage'
+          Write-Host "Storage path: $storage"
+          if (-not (Test-Path $storage)) {
+            Write-Host 'Nearby revolution directories:'
+            Get-ChildItem (Join-Path $env:APPDATA 'revolution') -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue | Select-Object FullName,Length | Format-Table -AutoSize
+            throw 'Expected Revolution Storage directory was not created.'
           }
-          Write-Host "Copied $n relevant small files."
 
-      - name: Print readable config and pattern files
-        shell: pwsh
-        run: |
-          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data'
-          Get-ChildItem $out -File -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Extension -match '(?i)\.ya?ml|\.json|\.txt|\.lua' -or $_.Name -match '(?i)pattern|settings|config|account|planter') {
-              Write-Host "===== $($_.Name) ====="
-              try { Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop | Select-Object -First 1 } catch { Write-Host "[binary/unreadable]" }
+          foreach ($name in @('config.yaml','settings.yaml','accounts.yaml','planters.yaml')) {
+            $src = Join-Path $storage $name
+            if (Test-Path $src -PathType Leaf) {
+              Copy-Item -LiteralPath $src -Destination (Join-Path $out $name) -Force
+              $h = (Get-FileHash $src -Algorithm SHA256).Hash.ToLowerInvariant()
+              Write-Host "CAPTURED $name bytes=$((Get-Item $src).Length) sha256=$h"
+            } else {
+              Write-Host "MISSING $name"
             }
           }
 
-      - name: Upload captured runtime data
-        if: always()
+          $up = Join-Path $env:USERPROFILE '.revolution-macro\userpatterns'
+          if (Test-Path $up) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $out 'userpatterns') | Out-Null
+            Get-ChildItem $up -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $out 'userpatterns') -Force
+              Write-Host "USERPATTERN $($_.Name) bytes=$($_.Length)"
+            }
+          }
+
+      - name: Print targeted Gather and pattern lines
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
+          foreach ($name in @('config.yaml','settings.yaml')) {
+            $f = Join-Path $out $name
+            if (-not (Test-Path $f)) { continue }
+            Write-Host "===== $name targeted matches ====="
+            Select-String -Path $f -Pattern 'patterns:|gatherPattern|availablePatterns|sprinklerType|backpackPercent|walkReturn|driftComp|repetitions|dataRepoVersion|dataRepoHash|patternMemberType|pattern:' -Context 3,10 |
+              Select-Object -First 250 |
+              ForEach-Object { $_.ToString() }
+          }
+
+      - name: Upload exact runtime data
         uses: actions/upload-artifact@v4
         with:
-          name: revolution-desktop-runtime-data
-          path: ${{ runner.temp }}/revo-runtime-data/
-          if-no-files-found: warn
+          name: revolution-desktop-runtime-data-exact
+          path: ${{ runner.temp }}/revo-runtime-data-exact/
+          if-no-files-found: error
