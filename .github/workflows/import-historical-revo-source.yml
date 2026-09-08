@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
+          cache: false
       - name: Download pinned historical module from Go proxy
         shell: bash
         run: |
@@ -46,11 +47,16 @@ jobs:
                   else:
                       target.parent.mkdir(parents=True,exist_ok=True)
                       with f.open(name) as src, open(target,'wb') as dst: shutil.copyfileobj(src,dst)
-          print('files',sum(1 for p in out.rglob('*') if p.is_file()))
+          files=[p for p in out.rglob('*') if p.is_file()]
+          print('files',len(files))
+          print('top-level',sorted(p.name for p in out.iterdir())[:100])
+          if not (out/'go.mod').is_file():
+              raise SystemExit('historical module go.mod missing')
+          licenses=[p for p in out.iterdir() if p.is_file() and p.name.lower().startswith('license')]
+          if not licenses:
+              raise SystemExit('historical module license file missing')
+          print('license',licenses[0])
           PY
-          test -f third_party/revolution-2025-gpl/go.mod
-          test -f third_party/revolution-2025-gpl/LICENSE
-          test -d third_party/revolution-2025-gpl/macro
       - name: Add provenance notice
         shell: bash
         run: |
@@ -61,9 +67,9 @@ jobs:
 
           `github.com/nosyliam/revolution@v0.0.0-20250120031029-3f890744b55a`
 
-          downloaded from the public Go module proxy. It was published January 20, 2025 and is GPL-3.0 licensed.
+          downloaded from the public Go module proxy. It was published January 20, 2025 and carries its upstream GPL licensing files.
 
-          It is **historical reference source**. It is not asserted to be the source of the current RevolutionMacro.exe release used by this Android project. Android-specific work should preserve this distinction and the GPL notices.
+          It is **historical reference source**. It is not asserted to be the source of the current RevolutionMacro.exe release used by this Android project. Android-specific work must preserve this distinction and the upstream licensing notices.
           EOF
       - name: Commit imported source
         shell: bash
@@ -73,4 +79,9 @@ jobs:
           git add third_party/revolution-2025-gpl
           if git diff --cached --quiet; then exit 0; fi
           git commit -m 'Import historical GPL Revolution source for Android porting'
-          git push origin HEAD:main
+          for try in 1 2 3 4; do
+            if git push origin HEAD:main; then exit 0; fi
+            git fetch origin main
+            git rebase origin/main
+          done
+          exit 1
