@@ -20,6 +20,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
           curl -fL --retry 3 -o /tmp/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  /tmp/RevolutionMacro.exe" | sha256sum -c -
