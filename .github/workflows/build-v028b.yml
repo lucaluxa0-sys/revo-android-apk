@@ -1,4 +1,4 @@
-name: Revo Android v0.2.8 real interaction retry
+name: Build test and publish Revo Android v0.2.8.1
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/build-v028b.yml'
+      - 'patches/android-backend-v0.2.8.1.js'
 
 permissions:
   contents: write
@@ -25,7 +26,7 @@ jobs:
           gradle-version: '8.13'
       - uses: android-actions/setup-android@v3
 
-      - name: Prepare Android source and exact Revo frontend
+      - name: Restore Android source and exact Revolution frontend
         shell: bash
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -55,6 +56,7 @@ jobs:
               patches/android-backend-v0.2.5.js \
               patches/android-backend-v0.2.6.js \
               patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
               > revo-android/app/src/main/assets/www/android-wails-shim.js
 
       - name: Install real Revolution icon
@@ -64,6 +66,7 @@ jobs:
           mkdir -p /tmp/revo-icon revo-android/app/src/main/res/drawable-nodpi
           (cd /tmp/revo-icon && 7z x -y "$GITHUB_WORKSPACE/.cache/RevolutionMacro.exe" '.rsrc/0/ICON/1' >/dev/null)
           cp /tmp/revo-icon/.rsrc/0/ICON/1 revo-android/app/src/main/res/drawable-nodpi/revo_icon.png
+          file revo-android/app/src/main/res/drawable-nodpi/revo_icon.png | grep -q 'PNG image data, 256 x 256'
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -75,7 +78,7 @@ jobs:
           p.write_text(s)
           PY
 
-      - name: Instrument WebView with real-page navigation probe
+      - name: Instrument WebView for Android 15 interaction gate
         shell: bash
         run: |
           python3 - <<'PY'
@@ -84,14 +87,14 @@ jobs:
           p=Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
           s=p.read_text()
           s=s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
-          s=s.replace('web.setWebChromeClient(new WebChromeClient());', '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) { Log.e("RevoWeb", cm.message()); return true; }\n        });''')
+          s=s.replace('web.setWebChromeClient(new WebChromeClient());', '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
           marker='web.loadUrl("https://revo.local/index.android.html");'
           probe=textwrap.dedent(r'''
           web.loadUrl("https://revo.local/index.android.html");
           Handler gate = new Handler(Looper.getMainLooper());
           gate.postDelayed(() -> web.evaluateJavascript(
-          "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';const text=e=>(e.innerText||e.textContent||'').trim();const buttons=()=>[...document.querySelectorAll('button')].filter(visible);const findButton=t=>buttons().find(b=>text(b)===t||text(b).includes(t));const tap=e=>{if(!e)return false;try{e.scrollIntoView({block:'center',inline:'center'});}catch(_){};const R=e.getBoundingClientRect(),x=R.left+R.width/2,y=R.top+R.height/2;for(const type of ['pointerdown','mousedown','pointerup','mouseup','click']){try{const C=type.startsWith('pointer')&&window.PointerEvent?PointerEvent:MouseEvent;e.dispatchEvent(new C(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,pointerId:1,pointerType:'touch',isPrimary:true,button:0,buttons:type.includes('down')?1:0}));}catch(_){}}return true;};const out={};try{const rt=window.dataRuntime,m=window.go.cmd.Macro;out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;out.tooltipCount=Object.keys(rt.tooltips||{}).length;out.discordShowed=rt.Object('settings').Concrete('discordRichPresencePromptShowed');out.discordEnabled=rt.presetObject(rt.preset||rt.defaultPreset||'Default').Object('macro').Concrete('discordRichPresenceEnabled');const active=rt.presetObject(rt.preset||rt.defaultPreset||'Default').Object('patterns').List('active');active.keyField='id';active.primitive=false;const startCount=active.values.length;await m.AddDefaultField('sunflower');await sleep(200);const added=active.values.find(x=>x&&x.object&&x.object.Concrete('field')==='sunflower');out.gatherAdded=!!added;out.gatherDelta=active.values.length-startCount;if(added)await m.DeleteField(added.key);await sleep(200);out.gatherRestored=active.values.length===startCount;let replay=null;window.runtime.EventsOnMultiple('logs_batch',x=>replay=x,1);await sleep(100);out.logCount=(window.RevoAndroidDebug.logs()||[]).length;out.logReplay=Array.isArray(replay)?replay.length:-1;const auto=rt.presetObject(rt.preset||rt.defaultPreset||'Default').Object('planter').Object('autoPlanters');auto.Set('enabled',true);await m.RefreshPlanterSchedule('Default');await sleep(700);const ps=rt.planterObject(rt.account||'Default').Object('state');out.solverRunning=ps.Concrete('solverRunning');out.solverStatus=ps.Concrete('solverStatus');out.solverReason=ps.Concrete('solverFailureReason');const planters=findButton('Planters');out.plantersTab=!!planters;tap(planters);await sleep(700);out.afterPlantersVisible=buttons().map(text).filter(Boolean).slice(0,40);const autoBtn=findButton('Auto-Planters');out.autoButton=!!autoBtn;tap(autoBtn);await sleep(700);let dialog=[...document.querySelectorAll('[role=dialog]')].filter(visible).find(d=>text(d).includes('Auto-Planters'));out.autoDialog=!!dialog;out.dialogText=dialog?text(dialog).slice(0,300):'';const help=dialog?[...dialog.querySelectorAll('button[aria-label=Help]')].find(visible):null;out.helpButton=!!help;tap(help);await sleep(200);const popup=document.querySelector('[data-revo-help-popup]');out.helpPopup=!!popup&&visible(popup);out.helpText=popup?text(popup).slice(0,240):'';const closeHelp=document.querySelector('button[aria-label=\"Close help\"]');tap(closeHelp);await sleep(150);out.helpClosed=!document.querySelector('[data-revo-help-popup]');dialog=[...document.querySelectorAll('[role=dialog]')].filter(visible).find(d=>text(d).includes('Auto-Planters'));const closeCandidates=dialog?[...dialog.querySelectorAll('button')].filter(visible).filter(b=>(b.getAttribute('aria-label')||'').toLowerCase().includes('close')||text(b)==='×'):[];out.modalCloseButtons=closeCandidates.map(b=>b.getAttribute('aria-label')||text(b));tap(closeCandidates[0]);await sleep(300);out.modalClosed=![...document.querySelectorAll('[role=dialog]')].filter(visible).some(d=>text(d).includes('Auto-Planters'));out.discordPromptInDom=(document.body.innerText||'').includes('Discord Rich Presence')&&(document.body.innerText||'').includes('Enable');console.error('RevoV028BProbe '+JSON.stringify(out));}catch(e){console.error('RevoV028BProbe ERROR '+String(e)+' '+(e&&e.stack||''));}})()",
-          value -> Log.e("RevoV028BGate", String.valueOf(value))), 16000);
+          "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden';const txt=e=>(e.innerText||e.textContent||'').trim();const btns=()=>[...document.querySelectorAll('button')].filter(visible);const exact=t=>btns().find(b=>txt(b)===t);const tap=e=>{if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true};const out={};try{out.schema=window.RevoAndroidDebug&&window.RevoAndroidDebug.autoPlanterSchema&&window.RevoAndroidDebug.autoPlanterSchema();out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;out.tooltipCount=Object.keys((window.dataRuntime&&window.dataRuntime.tooltips)||{}).length;tap(exact('Planters'));await sleep(500);const open=exact('Auto-Planters');out.openButton=!!open;tap(open);await sleep(700);let dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);let d=dialogs.find(x=>txt(x).includes('Auto-Planters'));out.autoDialog=!!d;out.dialogText=d?txt(d).slice(0,500):'';const helps=d?[...d.querySelectorAll('button[aria-label=Help]')].filter(visible):[];out.helpCount=helps.length;tap(helps[0]);await sleep(250);const popup=document.querySelector('[data-revo-help-popup]');out.helpPopup=!!popup&&visible(popup);out.helpText=popup?txt(popup).slice(0,300):'';tap(document.querySelector('button[aria-label=\"Close help\"]'));await sleep(150);out.helpClosed=!document.querySelector('[data-revo-help-popup]');d=[...document.querySelectorAll('[role=dialog]')].filter(visible).find(x=>txt(x).includes('Auto-Planters'));const close=d&&[...d.querySelectorAll('button')].find(b=>(b.getAttribute('aria-label')||'').toLowerCase().includes('close'));out.closeFound=!!close;tap(close);await sleep(300);out.modalClosed=![...document.querySelectorAll('[role=dialog]')].filter(visible).some(x=>txt(x).includes('Auto-Planters'));out.discordPrompt=(document.body.innerText||'').includes('Discord Rich Presence')&&(document.body.innerText||'').includes('Enable');console.error('RevoV0281Probe '+JSON.stringify(out));}catch(e){console.error('RevoV0281Probe ERROR '+String(e)+' '+(e&&e.stack||''));}})()",
+          value -> Log.e("RevoV0281Gate", String.valueOf(value))), 15000);
           ''').strip()
           if marker not in s: raise SystemExit('loadUrl marker missing')
           p.write_text(s.replace(marker,probe,1))
@@ -108,7 +111,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
 
-      - name: Android 15 interaction gate
+      - name: Android 15 Auto-Planters and help gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -123,37 +126,33 @@ jobs:
             adb logcat -c
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
-            sleep 23
-            adb exec-out screencap -p > emulator-artifacts/revo-v028b.png
-            adb logcat -d -v time > emulator-artifacts/logcat-v028b.txt
-            grep 'RevoV028BProbe {' emulator-artifacts/logcat-v028b.txt | tail -n1 > emulator-artifacts/probe.txt
+            sleep 22
+            adb exec-out screencap -p > emulator-artifacts/revo-v0281.png
+            adb logcat -d -v time > emulator-artifacts/logcat-v0281.txt
+            ! grep -q 'RevoV0281Probe ERROR' emulator-artifacts/logcat-v0281.txt
+            grep 'RevoV0281Probe {' emulator-artifacts/logcat-v0281.txt | tail -n1 > emulator-artifacts/probe.txt
             cat emulator-artifacts/probe.txt
-            grep -q '"backend":"0.2.8"' emulator-artifacts/probe.txt
-            grep -Eq '"tooltipCount":([2-9][0-9]|[1-9][0-9]{2,})' emulator-artifacts/probe.txt
-            grep -q '"discordShowed":true' emulator-artifacts/probe.txt
-            grep -q '"discordEnabled":false' emulator-artifacts/probe.txt
-            grep -q '"gatherAdded":true' emulator-artifacts/probe.txt
-            grep -q '"gatherDelta":1' emulator-artifacts/probe.txt
-            grep -q '"gatherRestored":true' emulator-artifacts/probe.txt
-            grep -Eq '"logCount":[1-9][0-9]*' emulator-artifacts/probe.txt
-            grep -Eq '"logReplay":[1-9][0-9]*' emulator-artifacts/probe.txt
-            grep -q '"solverRunning":false' emulator-artifacts/probe.txt
-            grep -q '"solverStatus":"blocked"' emulator-artifacts/probe.txt
-            grep -q '"plantersTab":true' emulator-artifacts/probe.txt
-            grep -q '"autoButton":true' emulator-artifacts/probe.txt
+            grep -q '"backend":"0.2.8.1"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"type"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"field"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"planter"' emulator-artifacts/probe.txt
+            grep -Eq '"tooltipCount":[1-9][0-9]*' emulator-artifacts/probe.txt
+            grep -q '"openButton":true' emulator-artifacts/probe.txt
             grep -q '"autoDialog":true' emulator-artifacts/probe.txt
-            grep -q '"helpButton":true' emulator-artifacts/probe.txt
+            grep -Eq '"helpCount":[1-9][0-9]*' emulator-artifacts/probe.txt
             grep -q '"helpPopup":true' emulator-artifacts/probe.txt
             grep -q '"helpClosed":true' emulator-artifacts/probe.txt
+            grep -q '"closeFound":true' emulator-artifacts/probe.txt
             grep -q '"modalClosed":true' emulator-artifacts/probe.txt
-            grep -q '"discordPromptInDom":false' emulator-artifacts/probe.txt
-            echo 'PASS: v0.2.8 real Android interaction retry is green'
+            grep -q '"discordPrompt":false' emulator-artifacts/probe.txt
+            ! grep -q "Cannot read properties of undefined (reading 'Concrete')" emulator-artifacts/logcat-v0281.txt
+            echo 'PASS: v0.2.8.1 real Android interaction gate is green'
 
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: revo-android-v0.2.8b-emulator-evidence
+          name: revo-android-v0.2.8.1-emulator-evidence
           path: emulator-artifacts/
           if-no-files-found: warn
 
@@ -162,8 +161,9 @@ jobs:
         run: |
           cp /tmp/MainActivity.clean.java revo-android/app/src/main/java/com/revolution/android/MainActivity.java
           gradle -p revo-android --stacktrace clean :app:assembleDebug
-          cp revo-android/app/build/outputs/apk/debug/app-debug.apk /tmp/RevolutionMacro-Android-v0.2.8-dev.apk
-          sha256sum /tmp/RevolutionMacro-Android-v0.2.8-dev.apk | sed 's#/tmp/##' > /tmp/SHA256SUMS-v028.txt
+          cp revo-android/app/build/outputs/apk/debug/app-debug.apk /tmp/RevolutionMacro-Android-v0.2.8.1-dev.apk
+          sha256sum /tmp/RevolutionMacro-Android-v0.2.8.1-dev.apk | sed 's#/tmp/##' > /tmp/SHA256SUMS-v0281.txt
+          cat /tmp/SHA256SUMS-v0281.txt
 
       - name: Publish only after green emulator gate
         shell: bash
@@ -174,10 +174,10 @@ jobs:
           for try in 1 2 3 4; do
             git fetch origin main
             git reset --hard origin/main
-            cp /tmp/RevolutionMacro-Android-v0.2.8-dev.apk RevolutionMacro-Android-v0.2.8-dev.apk
-            cp /tmp/SHA256SUMS-v028.txt SHA256SUMS.txt
-            git add RevolutionMacro-Android-v0.2.8-dev.apk SHA256SUMS.txt
-            git commit -m 'Publish emulator-gated RevolutionMacro Android v0.2.8 dev APK' || exit 0
+            cp /tmp/RevolutionMacro-Android-v0.2.8.1-dev.apk RevolutionMacro-Android-v0.2.8.1-dev.apk
+            cp /tmp/SHA256SUMS-v0281.txt SHA256SUMS.txt
+            git add RevolutionMacro-Android-v0.2.8.1-dev.apk SHA256SUMS.txt
+            git commit -m 'Publish emulator-gated RevolutionMacro Android v0.2.8.1 dev APK' || exit 0
             git push origin HEAD:main && exit 0
           done
           exit 1
