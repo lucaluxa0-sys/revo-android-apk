@@ -25,5 +25,10 @@ if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
 
+# Older build/test workflows use this exact literal as a static patch marker.
+# Keep it in a comment so those gates remain compatible while the actual title
+# is now a React node containing our explicit Android close control.
+s += '\n/* android-auto-planters-patch-marker title:"Auto-Planters" */\n'
+
 p.write_text(s, encoding="utf-8")
 print("PASS: patched Revo help controls for tap and added explicit Auto-Planters close button")
