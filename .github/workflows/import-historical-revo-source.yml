@@ -28,13 +28,16 @@ jobs:
           GOPROXY=https://proxy.golang.org go mod download -json "$MOD" > /tmp/module.json
           cat /tmp/module.json
           python3 - <<'PY'
-          import json, shutil
+          import json, os, shutil, stat
           from pathlib import Path
           j=json.load(open('/tmp/module.json'))
           src=Path(j['Dir'])
           out=Path('third_party/revolution-2025-gpl')
           if out.exists(): shutil.rmtree(out)
           shutil.copytree(src,out)
+          for p in [out,*out.rglob('*')]:
+              try: p.chmod(p.stat().st_mode | stat.S_IWUSR)
+              except OSError: pass
           files=[p for p in out.rglob('*') if p.is_file()]
           print('files',len(files))
           print('top-level',sorted(p.name for p in out.iterdir())[:100])
