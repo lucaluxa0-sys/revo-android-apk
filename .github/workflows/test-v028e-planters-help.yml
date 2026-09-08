@@ -47,6 +47,7 @@ jobs:
           grep -q 'header:{padding:"8px 12px 4px",minHeight:36}' "$JS"
           grep -q 'data-revo-help-popup' "$JS"
           grep -q 'android-planter-studio-mobile-complete' "$JS"
+          grep -q 'aria-label":"Open Auto-Planters' "$JS"
           cat patches/android-wails-shim-v0.2.4.js \
               patches/android-backend-v0.2.5.js \
               patches/android-backend-v0.2.6.js \
@@ -75,7 +76,7 @@ jobs:
           web.loadUrl("https://revo.local/index.android.html");
           Handler gate = new Handler(Looper.getMainLooper());
           gate.postDelayed(() -> web.evaluateJavascript(
-          "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));const visible=e=>{if(!e||!e.getClientRects().length)return false;const s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>.01};const txt=e=>(e.innerText||e.textContent||'').trim();const clickables=()=>[...document.querySelectorAll('button,[role=button]')].filter(visible);const exact=t=>clickables().find(b=>txt(b)===t);const tap=e=>{if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true};const body=()=>document.body.innerText||'';const out={};try{const rt=window.dataRuntime;const preset=rt&&rt.presetObject(rt.preset||rt.defaultPreset||'Default');out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;out.schema=window.RevoAndroidDebug&&window.RevoAndroidDebug.autoPlanterSchema&&window.RevoAndroidDebug.autoPlanterSchema();out.plantersTab=tap(exact('Planters'));await sleep(600);out.introInitially=body().includes('Welcome To Planter Studio');out.automaticClicked=out.introInitially?tap(exact('Automatic')):false;await sleep(650);out.introGone=!body().includes('Welcome To Planter Studio');out.introShownState=rt&&rt.Object('planters').Concrete('introShowed');out.autoEnabled=preset&&preset.Object('planter').Object('autoPlanters').Concrete('enabled');if(window.RevoAndroidDebug&&window.RevoAndroidDebug.persistNow)window.RevoAndroidDebug.persistNow();out.openButton=tap(exact('Auto-Planters'));await sleep(700);let dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);let d=dialogs.find(x=>txt(x).includes('Auto-Planters'))||null;out.autoDialog=!!d;out.dialogText=d?txt(d).slice(0,500):'';out.titleVisible=!!d&&txt(d).includes('Auto-Planters');const helps=d?[...d.querySelectorAll('button[aria-label=Help]')].filter(visible):[];out.helpCount=helps.length;out.helpClicked=tap(helps[0]);await sleep(250);const popup=document.querySelector('[data-revo-help-popup]');out.helpPopup=!!popup&&visible(popup);out.helpText=popup?txt(popup).slice(0,300):'';out.helpCloseClicked=tap(document.querySelector('button[aria-label=\"Close help\"]'));await sleep(180);out.helpClosed=!document.querySelector('[data-revo-help-popup]');dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);d=dialogs.find(x=>txt(x).includes('Auto-Planters'))||null;const close=d?[...d.querySelectorAll('button')].find(b=>(b.getAttribute('aria-label')||'')==='Close Auto-Planters'):null;out.closeLabel=close?(close.getAttribute('aria-label')||txt(close)):'';out.closeFound=!!close;out.closeClicked=tap(close);await sleep(500);out.autoModalClosed=![...document.querySelectorAll('[role=dialog]')].filter(visible).some(x=>txt(x).includes('Auto-Planters'));out.introStillGone=!body().includes('Welcome To Planter Studio');out.greyOverlayGone=![...document.querySelectorAll('[data-overlay], .mantine-Modal-overlay')].some(visible);out.discordPrompt=body().includes('Discord Rich Presence')&&body().includes('Enable');console.error('RevoPlanterGate '+JSON.stringify(out));}catch(e){console.error('RevoPlanterGate ERROR '+String(e)+' '+(e&&e.stack||''));}})()",
+          "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));const visible=e=>{if(!e||!e.getClientRects().length)return false;const s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>.01};const txt=e=>(e.innerText||e.textContent||'').trim();const clickables=()=>[...document.querySelectorAll('button,[role=button]')].filter(visible);const exact=t=>clickables().find(b=>txt(b)===t);const tap=e=>{if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true};const body=()=>document.body.innerText||'';const out={};try{const rt=window.dataRuntime;const preset=rt&&rt.presetObject(rt.preset||rt.defaultPreset||'Default');out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;out.schema=window.RevoAndroidDebug&&window.RevoAndroidDebug.autoPlanterSchema&&window.RevoAndroidDebug.autoPlanterSchema();out.plantersTab=tap(exact('Planters'));await sleep(700);out.introInitially=body().includes('Welcome To Planter Studio');out.automaticClicked=out.introInitially?tap(exact('Automatic')):false;await sleep(1500);out.introGone=!body().includes('Welcome To Planter Studio');out.introShownState=rt&&rt.Object('planters').Concrete('introShowed');out.autoEnabled=preset&&preset.Object('planter').Object('autoPlanters').Concrete('enabled');if(window.RevoAndroidDebug&&window.RevoAndroidDebug.persistNow)window.RevoAndroidDebug.persistNow();const opener=[...document.querySelectorAll('button[aria-label=\"Open Auto-Planters\"]')].find(visible);out.openButtonFound=!!opener;out.openButtonClicked=tap(opener);await sleep(1100);let dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);out.visibleDialogTexts=dialogs.map(x=>txt(x).slice(0,120));let d=dialogs.find(x=>txt(x).includes('Auto-Planters'))||null;out.autoDialog=!!d;out.dialogText=d?txt(d).slice(0,500):'';out.titleVisible=!!d&&txt(d).includes('Auto-Planters');const helps=d?[...d.querySelectorAll('button[aria-label=Help]')].filter(visible):[];out.helpCount=helps.length;out.helpClicked=tap(helps[0]);await sleep(300);const popup=document.querySelector('[data-revo-help-popup]');out.helpPopup=!!popup&&visible(popup);out.helpText=popup?txt(popup).slice(0,300):'';out.helpCloseClicked=tap(document.querySelector('button[aria-label=\"Close help\"]'));await sleep(220);out.helpClosed=!document.querySelector('[data-revo-help-popup]');dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);d=dialogs.find(x=>txt(x).includes('Auto-Planters'))||null;const close=d?[...d.querySelectorAll('button')].find(b=>(b.getAttribute('aria-label')||'')==='Close Auto-Planters'):null;out.closeFound=!!close;out.closeClicked=tap(close);await sleep(650);out.autoModalClosed=![...document.querySelectorAll('[role=dialog]')].filter(visible).some(x=>txt(x).includes('Auto-Planters'));out.introStillGone=!body().includes('Welcome To Planter Studio');out.greyOverlayGone=![...document.querySelectorAll('[data-overlay], .mantine-Modal-overlay')].some(visible);out.discordPrompt=body().includes('Discord Rich Presence')&&body().includes('Enable');console.error('RevoPlanterGate '+JSON.stringify(out));}catch(e){console.error('RevoPlanterGate ERROR '+String(e)+' '+(e&&e.stack||''));}})()",
           value -> Log.e("RevoPlanterGateSchedule", String.valueOf(value))), 15000);
           ''').strip()
           if marker not in s: raise SystemExit('loadUrl marker missing')
@@ -100,16 +101,31 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
+            set +e
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
-            sleep 22
+            sleep 23
             adb exec-out screencap -p > emulator-artifacts/revo-planter-first.png
             adb logcat -d -v time > emulator-artifacts/logcat-first.txt
             grep 'RevoPlanterGate {' emulator-artifacts/logcat-first.txt | tail -n1 > emulator-artifacts/probe-first.txt
             cat emulator-artifacts/probe-first.txt
+
+            adb logcat -c
+            adb shell am force-stop com.revolution.android
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 23
+            adb exec-out screencap -p > emulator-artifacts/revo-planter-relaunch.png
+            adb logcat -d -v time > emulator-artifacts/logcat-relaunch.txt
+            grep 'RevoPlanterGate {' emulator-artifacts/logcat-relaunch.txt | tail -n1 > emulator-artifacts/probe-relaunch.txt
+            cat emulator-artifacts/probe-relaunch.txt
+
+            set -e
+            test -s emulator-artifacts/probe-first.txt
+            test -s emulator-artifacts/probe-relaunch.txt
+
             grep -q '"backend":"0.2.8.1"' emulator-artifacts/probe-first.txt
             grep -q '"keyField":"type"' emulator-artifacts/probe-first.txt
             grep -q '"keyField":"field"' emulator-artifacts/probe-first.txt
@@ -119,7 +135,8 @@ jobs:
             grep -q '"introGone":true' emulator-artifacts/probe-first.txt
             grep -q '"introShownState":true' emulator-artifacts/probe-first.txt
             grep -q '"autoEnabled":true' emulator-artifacts/probe-first.txt
-            grep -q '"openButton":true' emulator-artifacts/probe-first.txt
+            grep -q '"openButtonFound":true' emulator-artifacts/probe-first.txt
+            grep -q '"openButtonClicked":true' emulator-artifacts/probe-first.txt
             grep -q '"autoDialog":true' emulator-artifacts/probe-first.txt
             grep -q '"titleVisible":true' emulator-artifacts/probe-first.txt
             grep -Eq '"helpCount":[1-9][0-9]*' emulator-artifacts/probe-first.txt
@@ -135,23 +152,23 @@ jobs:
             grep -q '"discordPrompt":false' emulator-artifacts/probe-first.txt
             ! grep -q "Cannot read properties of undefined (reading 'Concrete')" emulator-artifacts/logcat-first.txt
 
-            adb logcat -c
-            adb shell am force-stop com.revolution.android
-            adb shell am start -W -n com.revolution.android/.MainActivity
-            sleep 22
-            adb exec-out screencap -p > emulator-artifacts/revo-planter-relaunch.png
-            adb logcat -d -v time > emulator-artifacts/logcat-relaunch.txt
-            grep 'RevoPlanterGate {' emulator-artifacts/logcat-relaunch.txt | tail -n1 > emulator-artifacts/probe-relaunch.txt
-            cat emulator-artifacts/probe-relaunch.txt
+            grep -q '"backend":"0.2.8.1"' emulator-artifacts/probe-relaunch.txt
             grep -q '"introInitially":false' emulator-artifacts/probe-relaunch.txt
             grep -q '"introGone":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"introShownState":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"autoEnabled":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"openButtonFound":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"openButtonClicked":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"autoDialog":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"helpPopup":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"helpClosed":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"closeFound":true' emulator-artifacts/probe-relaunch.txt
+            grep -q '"closeClicked":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"autoModalClosed":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"introStillGone":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"greyOverlayGone":true' emulator-artifacts/probe-relaunch.txt
             grep -q '"discordPrompt":false' emulator-artifacts/probe-relaunch.txt
-            echo 'PASS: Planter Studio mode persists, Auto-Planters closes, help works, and no grey blocker remains on Android 15'
+            echo 'PASS: Planter Studio persists, exact Auto-Planters button opens/closes, help works, and no grey blocker remains on Android 15'
 
       - name: Upload evidence
         if: always()
