@@ -1,0 +1,72 @@
+name: Import historical GPL Revolution source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Download pinned historical module from Go proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          MOD='github.com/nosyliam/revolution@v0.0.0-20250120031029-3f890744b55a'
+          GOPROXY=https://proxy.golang.org go mod download -json "$MOD" > /tmp/module.json
+          cat /tmp/module.json
+          python3 - <<'PY'
+          import json, shutil, zipfile
+          from pathlib import Path
+          j=json.load(open('/tmp/module.json'))
+          z=Path(j['Zip'])
+          out=Path('third_party/revolution-2025-gpl')
+          if out.exists(): shutil.rmtree(out)
+          out.mkdir(parents=True)
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist()
+              prefix=names[0].split('/')[0]+'/'
+              for name in names:
+                  rel=name[len(prefix):] if name.startswith(prefix) else name
+                  if not rel: continue
+                  target=out/rel
+                  if name.endswith('/'):
+                      target.mkdir(parents=True,exist_ok=True)
+                  else:
+                      target.parent.mkdir(parents=True,exist_ok=True)
+                      with f.open(name) as src, open(target,'wb') as dst: shutil.copyfileobj(src,dst)
+          print('files',sum(1 for p in out.rglob('*') if p.is_file()))
+          PY
+          test -f third_party/revolution-2025-gpl/go.mod
+          test -f third_party/revolution-2025-gpl/LICENSE
+          test -d third_party/revolution-2025-gpl/macro
+      - name: Add provenance notice
+        shell: bash
+        run: |
+          cat > third_party/revolution-2025-gpl/ANDROID_PORT_PROVENANCE.md <<'EOF'
+          # Historical Revolution source used for Android porting reference
+
+          This directory is the Go module snapshot:
+
+          `github.com/nosyliam/revolution@v0.0.0-20250120031029-3f890744b55a`
+
+          downloaded from the public Go module proxy. It was published January 20, 2025 and is GPL-3.0 licensed.
+
+          It is **historical reference source**. It is not asserted to be the source of the current RevolutionMacro.exe release used by this Android project. Android-specific work should preserve this distinction and the GPL notices.
+          EOF
+      - name: Commit imported source
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add third_party/revolution-2025-gpl
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Import historical GPL Revolution source for Android porting'
+          git push origin HEAD:main
