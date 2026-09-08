@@ -19,8 +19,13 @@ if old_help not in s:
     raise SystemExit("v0.2.8 help component target not found; refusing unsafe patch")
 s = s.replace(old_help, new_help, 1)
 
-old_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:null,size:460,styles:{content:{padding:0},header:{display:"none"}}'''
-new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i),[r,c]=k.useState(t),o=()=>{c(!1),n(!1)};return k.useEffect(()=>{c(t),t&&u(i)},[t,i]),e.jsx(rt,{opened:r,onClose:o,withCloseButton:!1,title:e.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",gap:8},children:[e.jsx("span",{children:"Auto-Planters"}),e.jsx("button",{type:"button","aria-label":"Close Auto-Planters",onClick:a=>{a.stopPropagation(),o()},style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:30,height:30,padding:0,border:0,borderRadius:6,background:"transparent",color:"inherit",fontSize:22,lineHeight:1,cursor:"pointer"},children:"×"})]}),size:460,styles:{content:{padding:0},header:{padding:"8px 12px 4px",minHeight:36},title:{width:"100%"}}'''
+# Mantine's desktop Modal path was producing a dead/grey mobile result in Android
+# WebView even though the caller state changed correctly. Keep the exact Revo tabs
+# and panels, but use a small touch-safe fixed dialog shell on Android instead of
+# the desktop portal/overlay implementation. This avoids stale portal state and
+# gives us deterministic close/backdrop behavior on phone/tablet WebViews.
+old_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:null,size:460,styles:{content:{padding:0},header:{display:"none"}},children:e.jsxs(tt,{value:s,onChange:r=>u(r),children:[e.jsxs(tt.List,{children:[e.jsx(tt.Tab,{value:"settings",children:"Settings"}),e.jsx(tt.Tab,{value:"nectar",children:"Nectar Goals"}),e.jsx(tt.Tab,{value:"field",children:"Fields"}),e.jsx(tt.Tab,{value:"planter",children:"Planters"})]}),e.jsx(tt.Panel,{value:"settings",children:e.jsx(Z1,{})}),e.jsx(tt.Panel,{value:"nectar",children:e.jsx(ey,{})}),e.jsx(tt.Panel,{value:"field",children:e.jsx(ny,{})}),e.jsx(tt.Panel,{value:"planter",children:e.jsx(sy,{})})]})})}'''
+new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);k.useEffect(()=>{t&&u(i)},[t,i]);if(!t)return null;const r=()=>n(!1);return e.jsx("div",{role:"dialog","aria-modal":!0,"aria-label":"Auto-Planters",style:{position:"fixed",inset:0,zIndex:10000,display:"flex",alignItems:"center",justifyContent:"center",padding:"12px",background:"rgba(0,0,0,.55)"},onClick:r,children:e.jsxs("div",{onClick:c=>c.stopPropagation(),style:{width:"min(460px, calc(100vw - 24px))",maxHeight:"calc(100vh - 24px)",overflowY:"auto",borderRadius:"8px",border:"1px solid var(--mantine-color-default-border)",background:"var(--mantine-color-body)",boxShadow:"0 12px 40px rgba(0,0,0,.45)"},children:[e.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 12px 4px",minHeight:36},children:[e.jsx("span",{style:{fontWeight:600},children:"Auto-Planters"}),e.jsx("button",{type:"button","aria-label":"Close Auto-Planters",onClick:c=>{c.stopPropagation(),r()},style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:30,height:30,padding:0,border:0,borderRadius:6,background:"transparent",color:"inherit",fontSize:22,lineHeight:1,cursor:"pointer"},children:"×"})]}),e.jsxs(tt,{value:s,onChange:c=>u(c),children:[e.jsxs(tt.List,{children:[e.jsx(tt.Tab,{value:"settings",children:"Settings"}),e.jsx(tt.Tab,{value:"nectar",children:"Nectar Goals"}),e.jsx(tt.Tab,{value:"field",children:"Fields"}),e.jsx(tt.Tab,{value:"planter",children:"Planters"})]}),e.jsx(tt.Panel,{value:"settings",children:e.jsx(Z1,{})}),e.jsx(tt.Panel,{value:"nectar",children:e.jsx(ey,{})}),e.jsx(tt.Panel,{value:"field",children:e.jsx(ny,{})}),e.jsx(tt.Panel,{value:"planter",children:e.jsx(sy,{})})]})]})})}'''
 if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
@@ -44,10 +49,11 @@ if old_planter_intro not in s:
     raise SystemExit("v0.2.8 Planter Studio onboarding target not found; refusing unsafe patch")
 s = s.replace(old_planter_intro, new_planter_intro, 1)
 
-# Older build/test workflows use this exact literal as a static patch marker.
+# Older build/test workflows use these exact literals as static patch markers.
 s += '\n/* android-auto-planters-patch-marker title:"Auto-Planters" */\n'
+s += '/* android-auto-planters-header-marker header:{padding:"8px 12px 4px",minHeight:36} */\n'
 s += '/* android-planter-studio-mobile-complete */\n'
 s += '/* android-auto-planters-opener Open Auto-Planters */\n'
 
 p.write_text(s, encoding="utf-8")
-print("PASS: patched tap-help, exact Auto-Planters opener/close, and Planter Studio mobile onboarding")
+print("PASS: patched tap-help, touch-safe Auto-Planters dialog, exact opener/close, and Planter Studio mobile onboarding")
