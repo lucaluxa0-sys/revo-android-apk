@@ -7,6 +7,7 @@ on:
     paths:
       - '.ci/**'
       - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
       - '.github/workflows/build-and-publish-apk.yml'
 
 permissions:
@@ -57,7 +58,7 @@ jobs:
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
 
-      - name: Extract Revo frontend and apply Android runtime fix
+      - name: Extract Revo frontend and apply Android runtime/backend
         shell: bash
         run: |
           mkdir -p revo-android/app/src/main/assets/www
@@ -66,8 +67,9 @@ jobs:
             revo-android/app/src/main/assets/www
           cp revo-android/app/src/main/assets/www/index.android.html \
              revo-android/app/src/main/assets/www/index.html
-          cp patches/android-wails-shim-v0.2.4.js \
-             revo-android/app/src/main/assets/www/android-wails-shim.js
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
 
       - name: Build APK
         shell: bash
@@ -78,16 +80,16 @@ jobs:
         run: |
           APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
-          cp "$APK" RevolutionMacro-Android-v0.2.4-dev.apk
-          sha256sum RevolutionMacro-Android-v0.2.4-dev.apk > SHA256SUMS.txt
+          cp "$APK" RevolutionMacro-Android-v0.2.5-dev.apk
+          sha256sum RevolutionMacro-Android-v0.2.5-dev.apk > SHA256SUMS.txt
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add RevolutionMacro-Android-v0.2.4-dev.apk SHA256SUMS.txt
+          git add RevolutionMacro-Android-v0.2.5-dev.apk SHA256SUMS.txt
           if git diff --cached --quiet; then
             echo "APK already up to date"
           else
-            git commit -m "Publish RevolutionMacro Android v0.2.4 dev APK"
+            git commit -m "Publish RevolutionMacro Android v0.2.5 dev APK"
             git fetch origin main
             git rebase origin/main
             git push origin HEAD:main
@@ -96,6 +98,6 @@ jobs:
       - name: Upload build artifact too
         uses: actions/upload-artifact@v4
         with:
-          name: RevolutionMacro-Android-v0.2.4-dev
-          path: RevolutionMacro-Android-v0.2.4-dev.apk
+          name: RevolutionMacro-Android-v0.2.5-dev
+          path: RevolutionMacro-Android-v0.2.5-dev.apk
           if-no-files-found: error
