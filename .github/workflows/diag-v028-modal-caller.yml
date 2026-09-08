@@ -1,0 +1,43 @@
+name: Diagnose Revo Auto-Planters modal caller
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v028-modal-caller.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract exact frontend caller context
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          mkdir -p /tmp/www
+          curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
+          JS=$(find /tmp/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
+          python3 - "$JS" <<'PY'
+          from pathlib import Path
+          import sys
+          s=Path(sys.argv[1]).read_text(errors='ignore')
+          terms=['e.jsx(ay', 'e.jsxs(ay', 'children:"Auto-Planters"', 'onClick:()=>y(!0)', 'function ay', 'ay=({open']
+          for term in terms:
+              print('\n===== TERM',term,'=====')
+              p=0
+              while True:
+                  i=s.find(term,p)
+                  if i<0: break
+                  print('OFFSET',i)
+                  print(s[max(0,i-5000):min(len(s),i+7000)])
+                  print('\n---')
+                  p=i+len(term)
+          PY
