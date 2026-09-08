@@ -182,10 +182,8 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
             mkdir -p emulator-artifacts
-            APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
-            adb install -r "$APK"
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
             adb shell am force-stop com.revolution.android || true
             adb shell am start -W -n com.revolution.android/.MainActivity
@@ -194,16 +192,14 @@ jobs:
             adb logcat -d -v time > emulator-artifacts/logcat-v027.txt
             grep -E 'RevoAssetProbe|android-runtime|android-backend|preload' emulator-artifacts/logcat-v027.txt > emulator-artifacts/revo-v027-log.txt || true
             cat emulator-artifacts/revo-v027-log.txt
-            PROBE="$(grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1)"
-            test -n "$PROBE"
-            echo "$PROBE" | grep -q '"manifest":113'
-            echo "$PROBE" | grep -q '"fetched":113'
-            echo "$PROBE" | grep -q '"good":113'
-            echo "$PROBE" | grep -q '"bad":\[\]'
-            echo "$PROBE" | grep -q '"domBroken":\[\]'
-            echo "$PROBE" | grep -q '"runtime":"object"'
-            echo "$PROBE" | grep -q '"dataRuntime":"object"'
-            echo "$PROBE" | grep -q '"backend":"0.2.6"'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"manifest":113'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"fetched":113'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"good":113'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"bad":\[\]'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"domBroken":\[\]'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"runtime":"object"'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"dataRuntime":"object"'
+            grep 'RevoAssetProbe {' emulator-artifacts/logcat-v027.txt | tail -n1 | grep -q '"backend":"0.2.6"'
             echo 'PASS: Android emulator fetched all 113 Revo PNGs with zero broken rendered images'
 
       - name: Upload emulator evidence
