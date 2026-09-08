@@ -93,8 +93,11 @@ jobs:
         run: |
           rm -rf /tmp/revo-icon
           mkdir -p /tmp/revo-icon revo-android/app/src/main/res/drawable-nodpi
-          7z x .cache/RevolutionMacro.exe -o/tmp/revo-icon '.rsrc/ICON/*' >/dev/null
-          ICON=/tmp/revo-icon/.rsrc/ICON/3
+          (
+            cd /tmp/revo-icon
+            7z x -y "$GITHUB_WORKSPACE/.cache/RevolutionMacro.exe" '.rsrc/0/ICON/1' >/dev/null
+          )
+          ICON=/tmp/revo-icon/.rsrc/0/ICON/1
           test -s "$ICON"
           file "$ICON" | tee /tmp/revo-icon-file.txt
           grep -q 'PNG image data, 256 x 256' /tmp/revo-icon-file.txt
