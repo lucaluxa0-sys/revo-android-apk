@@ -28,33 +28,19 @@ jobs:
           GOPROXY=https://proxy.golang.org go mod download -json "$MOD" > /tmp/module.json
           cat /tmp/module.json
           python3 - <<'PY'
-          import json, shutil, zipfile
+          import json, shutil
           from pathlib import Path
           j=json.load(open('/tmp/module.json'))
-          z=Path(j['Zip'])
+          src=Path(j['Dir'])
           out=Path('third_party/revolution-2025-gpl')
           if out.exists(): shutil.rmtree(out)
-          out.mkdir(parents=True)
-          with zipfile.ZipFile(z) as f:
-              names=f.namelist()
-              prefix=names[0].split('/')[0]+'/'
-              for name in names:
-                  rel=name[len(prefix):] if name.startswith(prefix) else name
-                  if not rel: continue
-                  target=out/rel
-                  if name.endswith('/'):
-                      target.mkdir(parents=True,exist_ok=True)
-                  else:
-                      target.parent.mkdir(parents=True,exist_ok=True)
-                      with f.open(name) as src, open(target,'wb') as dst: shutil.copyfileobj(src,dst)
+          shutil.copytree(src,out)
           files=[p for p in out.rglob('*') if p.is_file()]
           print('files',len(files))
           print('top-level',sorted(p.name for p in out.iterdir())[:100])
-          if not (out/'go.mod').is_file():
-              raise SystemExit('historical module go.mod missing')
+          if not (out/'go.mod').is_file(): raise SystemExit('historical module go.mod missing')
           licenses=[p for p in out.iterdir() if p.is_file() and p.name.lower().startswith('license')]
-          if not licenses:
-              raise SystemExit('historical module license file missing')
+          if not licenses: raise SystemExit('historical module license file missing')
           print('license',licenses[0])
           PY
       - name: Add provenance notice
@@ -67,7 +53,7 @@ jobs:
 
           `github.com/nosyliam/revolution@v0.0.0-20250120031029-3f890744b55a`
 
-          downloaded from the public Go module proxy. It was published January 20, 2025 and carries its upstream GPL licensing files.
+          downloaded from the public Go module proxy. It was published January 20, 2025 and carries its upstream licensing files.
 
           It is **historical reference source**. It is not asserted to be the source of the current RevolutionMacro.exe release used by this Android project. Android-specific work must preserve this distinction and the upstream licensing notices.
           EOF
