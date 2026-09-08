@@ -88,7 +88,9 @@ jobs:
             echo "APK already up to date"
           else
             git commit -m "Publish RevolutionMacro Android v0.2.3 dev APK"
-            git push
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
           fi
 
       - name: Upload build artifact too
