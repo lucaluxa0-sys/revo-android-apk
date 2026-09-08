@@ -47,6 +47,20 @@
     return listIsValidKeyed(list, keyField);
   }
 
+  function pinVersion() {
+    window.RevoAndroidDebug = window.RevoAndroidDebug || {};
+    try {
+      Object.defineProperty(window.RevoAndroidDebug, 'backendVersion', {
+        configurable: true,
+        enumerable: true,
+        get: () => VERSION,
+        set: () => {}
+      });
+    } catch (_) {
+      window.RevoAndroidDebug.backendVersion = VERSION;
+    }
+  }
+
   function repairAutoPlantersSchema() {
     const preset = currentPreset();
     if (!preset) return false;
@@ -80,12 +94,12 @@
     }
 
     window.RevoAndroidDebug = window.RevoAndroidDebug || {};
-    window.RevoAndroidDebug.backendVersion = VERSION;
     window.RevoAndroidDebug.autoPlanterSchema = () => ({
       nectars: { keyField: auto.List('nectars').keyField, count: auto.List('nectars').values.length },
       fields: { keyField: auto.List('fields').keyField, count: auto.List('fields').values.length },
       planters: { keyField: auto.List('planters').keyField, count: auto.List('planters').values.length }
     });
+    pinVersion();
 
     console.log('[android-backend] v0.2.8.1 Auto-Planters keyed schema ready', okNectars, okFields, okPlanters);
     return true;
@@ -100,6 +114,11 @@
       setTimeout(install, 50);
       return;
     }
+    // v0.2.5/v0.2.6 installers can finish later depending on WebView timing.
+    // Keep this overlay authoritative after they have settled.
+    setTimeout(pinVersion, 250);
+    setTimeout(pinVersion, 1000);
+    setTimeout(pinVersion, 2500);
   }
 
   install();
