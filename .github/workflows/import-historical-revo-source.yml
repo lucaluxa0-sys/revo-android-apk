@@ -2,6 +2,10 @@ name: Import historical GPL Revolution source
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/import-historical-revo-source.yml'
 
 permissions:
   contents: write
