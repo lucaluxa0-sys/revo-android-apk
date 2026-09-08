@@ -1,0 +1,60 @@
+name: Diagnose Revo Android v0.2.8 details
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diagnose-v028-details.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact frontend and Android engine source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/src.zip
+          unzip -q /tmp/src.zip
+          curl -fL --retry 4 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          mkdir -p /tmp/www
+          python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
+      - name: Print targeted contracts and MacroEngine
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          js=Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
+          def hits(label, patterns, before=1400, after=4200, limit=8):
+              print('\n===== '+label+' =====')
+              seen=[]
+              for pat in patterns:
+                  pos=0
+                  while len(seen)<limit:
+                      i=js.find(pat,pos)
+                      if i<0: break
+                      if all(abs(i-x)>100 for x in seen): seen.append(i)
+                      pos=i+len(pat)
+              for i in sorted(seen):
+                  print('OFFSET',i)
+                  print(js[max(0,i-before):min(len(js),i+after)].replace('\n',' '))
+                  print('---')
+              if not seen: print('NOT FOUND')
+          hits('TOOLTIPS LOAD/RECEIVE', ['tooltips=', '.tooltips', 'ready_tooltip', 'tooltip_batch', 'tooltips_batch'], 1800, 3800, 10)
+          hits('AUTO PLANTERS UI', ['Auto Planters','openAutoPlanters','RefreshPlanterSchedule','refreshPlanterSchedule'], 2400, 6800, 12)
+          hits('PLANter MODALS', ['openPlanterSettings','Planter Settings','Harvest Automatic','Degradation Multiplier'], 2000, 5200, 10)
+          hits('ADD DELETE FIELD CALL SITES', ['Eh(', 'Oh(', 'DeleteField(', 'AddDefaultField('], 1600, 4200, 10)
+          hits('LOG UI EVENTS', ['ke("logs"','ke("logs_batch"','logs_batch','Copy Logs','Open Logs'], 1400, 4200, 10)
+          print('\n===== MACRO ENGINE JAVA =====')
+          p=Path('revo-android/app/src/main/java/com/revolution/android/MacroEngine.java')
+          print(p.read_text(errors='ignore'))
+          print('\n===== ANDROID BRIDGE JAVA =====')
+          p=Path('revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java')
+          print(p.read_text(errors='ignore'))
+          PY
