@@ -11,55 +11,94 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-      - name: Restore Android source
+      - name: Restore source and exact Revo release
+        shell: bash
         run: |
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/src.zip
           unzip -q /tmp/src.zip
-      - name: Download exact Revo release
-        run: |
           curl -fL --retry 4 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           mkdir -p /tmp/www
           python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
-      - name: Trace field creation call sites
+
+      - name: Inspect Gather add-field component and field schema
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           s=Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
-          for term in ['Eh(', 'Oh(', 'fields").List', 'Object("fields")', 'List("fields")', 'fieldName', 'gatherField', 'patternName']:
+          terms=['onAddField','function vv','const vv=','vv=(', 'identity:t', 'Object("gather")', '.Object("gather")', 'fields",', 'fieldOrder', 'gatherFields', 'Field Config']
+          for term in terms:
             print('\n===== '+term+' =====')
-            p=0; c=0
-            while c<15:
+            p=0;c=0
+            while c<12:
               i=s.find(term,p)
               if i<0: break
-              print(s[max(0,i-1800):min(len(s),i+3500)].replace('\n',' '))
+              print('OFFSET',i)
+              print(s[max(0,i-2600):min(len(s),i+5200)].replace('\n',' '))
               print('\n---')
-              p=i+len(term); c+=1
+              p=i+len(term);c+=1
           PY
-      - name: Inspect executable asset metadata
+
+      - name: Recover exact Vite PNGs by Rollup hash
+        shell: bash
         run: |
+          mkdir -p /tmp/hashprobe
+          cd /tmp/hashprobe
+          npm init -y >/dev/null 2>&1
+          npm install rollup@4 --no-audit --no-fund >/dev/null 2>&1
+          cd "$GITHUB_WORKSPACE"
+          node <<'JS'
+          const fs=require('fs');
+          const {xxhashBase64Url}=require('/tmp/hashprobe/node_modules/rollup/dist/native.js');
+          const exe=fs.readFileSync('/tmp/RevolutionMacro.exe');
+          const js=fs.readFileSync('/tmp/www/assets/index-2FXaJy0P.js','utf8');
+          const refs=[...new Set([...js.matchAll(/\/assets\/([A-Za-z0-9_-]+\.png)/g)].map(m=>m[1]))].sort();
+          function carvePngs(buf){
+            const sig=Buffer.from([137,80,78,71,13,10,26,10]); const out=[]; let pos=0;
+            while((pos=buf.indexOf(sig,pos))>=0){
+              let p=pos+8, ok=false;
+              while(p+12<=buf.length){
+                const len=buf.readUInt32BE(p); const typ=buf.toString('ascii',p+4,p+8); const end=p+12+len;
+                if(end>buf.length) break;
+                p=end;
+                if(typ==='IEND'){ok=true;break;}
+              }
+              if(ok){out.push({start:pos,end:p,data:buf.subarray(pos,p)});pos=p}else pos+=8;
+            }
+            return out;
+          }
+          const pngs=carvePngs(exe);
+          const byHash=new Map();
+          for(const p of pngs){
+            const h=xxhashBase64Url(p.data).slice(0,8);
+            if(!byHash.has(h)) byHash.set(h,[]);
+            byHash.get(h).push(p);
+          }
+          let matched=0;
+          for(const name of refs){
+            const h=name.slice(-12,-4); // 8 chars immediately before .png
+            const hits=byHash.get(h)||[];
+            if(hits.length){matched++;console.log('MATCH',name,h,hits.map(x=>`${x.start}:${x.data.length}`).join(','));}
+            else console.log('MISS ',name,h);
+          }
+          console.log(`SUMMARY refs=${refs.length} pngs=${pngs.length} matched=${matched}`);
+          if(matched<100) process.exitCode=2;
+          JS
+
+      - name: Extract real Revolution app icon
+        shell: bash
+        run: |
+          rm -rf /tmp/revo-pe && mkdir -p /tmp/revo-pe
+          cd /tmp/revo-pe
+          7z x -y /tmp/RevolutionMacro.exe '.rsrc/0/ICON/1' >/dev/null
+          find . -type f -maxdepth 6 -print -exec file {} \;
           python3 - <<'PY'
           from pathlib import Path
-          b=Path('/tmp/RevolutionMacro.exe').read_bytes()
-          for name in [b'sunflower-Dk6xbNfW.png',b'bamboo-BpyrWVZ4.png',b'atomic_treat-C1d4jv6O.png']:
-            print('\n====',name.decode(),'====')
-            p=0
-            while True:
-              i=b.find(name,p)
-              if i<0: break
-              print('OFFSET',i)
-              chunk=b[max(0,i-160):i+220]
-              print('HEX',chunk.hex())
-              print('ASCII',''.join(chr(x) if 32<=x<127 else '.' for x in chunk))
-              p=i+1
+          files=[p for p in Path('/tmp/revo-pe').rglob('*') if p.is_file()]
+          for p in files:
+            b=p.read_bytes()
+            print('ICONFILE',p,'SIZE',len(b),'PNG',b[:8]==b'\x89PNG\r\n\x1a\n')
           PY
-      - name: Check Go symbols and PE resources
-        run: |
-          echo '===== GO NM ASSET HITS ====='
-          go tool nm /tmp/RevolutionMacro.exe 2>/dev/null | grep -Ei 'sunflower|frontend|asset|icon' | head -100 || true
-          echo '===== RESOURCE TOOLS ====='
-          command -v wrestool || true
-          command -v 7z || true
-          7z l /tmp/RevolutionMacro.exe 2>/dev/null | head -120 || true
