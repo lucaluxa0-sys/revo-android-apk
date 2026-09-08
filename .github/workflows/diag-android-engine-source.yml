@@ -1,0 +1,36 @@
+name: Diagnose Android macro engine source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-android-engine-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore archived Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -d revo-android/app/src/main/java/com/revolution/android
+      - name: Print macro engine and Android bridge source
+        shell: bash
+        run: |
+          for f in \
+            revo-android/app/src/main/java/com/revolution/android/MacroEngine.java \
+            revo-android/app/src/main/java/com/revolution/android/MacroEngineRegistry.java \
+            revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java \
+            revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java; do
+            echo "===== BEGIN $f ====="
+            cat "$f"
+            echo "===== END $f ====="
+          done
