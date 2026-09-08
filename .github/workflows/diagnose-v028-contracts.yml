@@ -1,0 +1,81 @@
+name: Diagnose Revo Android v0.2.8 frontend contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diagnose-v028-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore frontend from exact public Revo release
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
+          unzip -q /tmp/revo-android-source.zip
+          curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  /tmp/RevolutionMacro.exe" | sha256sum -c -
+          mkdir -p /tmp/www
+          python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
+
+      - name: Print exact v0.2.8 contracts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          js = Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
+
+          def show(label, needle, before=900, after=1800, limit=4):
+              print(f'\n===== {label} =====')
+              pos = 0
+              count = 0
+              while count < limit:
+                  i = js.find(needle, pos)
+                  if i < 0:
+                      break
+                  print(f'OFFSET {i}')
+                  print(js[max(0,i-before):min(len(js),i+after)].replace('\n',' '))
+                  print('---')
+                  pos = i + max(1,len(needle))
+                  count += 1
+              if count == 0:
+                  print('NOT FOUND')
+
+          # Find the actual dataRuntime Tooltip method definition, not just callers.
+          print('\n===== TOOLTIP METHOD DEFINITIONS =====')
+          defs = list(re.finditer(r'Tooltip\([^)]*\)\{', js))
+          print('COUNT', len(defs))
+          for m in defs[:8]:
+              i=m.start()
+              print('OFFSET', i)
+              print(js[max(0,i-1200):min(len(js),i+2600)].replace('\n',' '))
+              print('---')
+
+          show('AUTOMATIC PLANTERS', 'Automatic Planters', 1800, 3600, 6)
+          show('REFRESH PLANTER SCHEDULE', 'RefreshPlanterSchedule', 1800, 3000, 6)
+          show('GENERATE SCHEDULE', 'Generate Schedule', 1800, 3000, 6)
+          show('PLANTER FAILURE STATE', 'failure', 1200, 2400, 4)
+
+          show('COPY LOGS FILE', 'CopyLogsFile', 1800, 3000, 6)
+          show('OPEN LOGS FOLDER', 'OpenLogsFolder', 1800, 3000, 6)
+          show('LOG LEVEL', 'Log Level', 1800, 3400, 6)
+          show('LOG EVENT STRINGS', 'log:', 1200, 2200, 8)
+
+          show('DISCORD PROMPT FLAG', 'discordRichPresencePromptShowed', 1800, 3200, 4)
+          show('DISCORD ENABLE FLAG', 'discordRichPresenceEnabled', 1800, 3200, 4)
+
+          # Report Wails macro wrapper function snippets for exact arg signatures.
+          for name in ['AddDefaultField','DeleteField','RefreshPlanterSchedule','CopyLogsFile','OpenLogsFolder','Start','Pause','Stop']:
+              show('WRAPPER '+name, name, 700, 1100, 4)
+          PY
