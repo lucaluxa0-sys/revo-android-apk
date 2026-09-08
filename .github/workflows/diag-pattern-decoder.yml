@@ -1,0 +1,34 @@
+name: Diagnose current Revo pattern decoder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-pattern-decoder.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Inspect pinned Revolution executable for dataset decoder clues
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  /tmp/RevolutionMacro.exe" | sha256sum -c -
+          echo '--- Go build metadata ---'
+          go version -m /tmp/RevolutionMacro.exe || true
+          echo '--- Go symbols relevant to patterns/datasets/crypto ---'
+          go tool nm /tmp/RevolutionMacro.exe 2>/dev/null | grep -Ei 'pattern|dataset|decrypt|encrypt|cipher|aes|chacha|xor|serialize|marshal|unmarshal' | head -n 500 || true
+          echo '--- strings relevant to patterns/datasets/crypto ---'
+          strings -n 6 /tmp/RevolutionMacro.exe | grep -Ei 'patterns\.bin|datasets/v8|dataset|decrypt|encrypt|cipher|aes|chacha|PatternManager|LoadPattern|pattern.*load|pattern.*dataset' | head -n 500 || true
