@@ -1,0 +1,46 @@
+name: Diagnose historical Revo Gather executor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-historical-gather.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Download historical GPL Revolution macro module
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER='v0.0.0-20250120031029-3f890744b55a'
+          go mod download -json "github.com/nosyliam/revolution/macro@$VER" > /tmp/module.json
+          python3 - <<'PY'
+          import json
+          j=json.load(open('/tmp/module.json'))
+          print('MODULE_DIR='+j['Dir'])
+          open('/tmp/module-dir','w').write(j['Dir'])
+          PY
+      - name: Print Gather movement and pattern implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=$(cat /tmp/module-dir)
+          echo '===== MATCHING FILES ====='
+          grep -RIlE 'gatherPattern|driftComp|backpackPercent|repetitions|walkReturn|sprinklerSpacing|pattern' "$D" --include='*.go' | head -n 100 | tee /tmp/files.txt
+          echo '===== RELEVANT EXCERPTS ====='
+          while IFS= read -r f; do
+            echo "===== BEGIN $f ====="
+            grep -nE -C 18 'gatherPattern|driftComp|backpackPercent|repetitions|walkReturn|sprinklerSpacing|Pattern|pattern' "$f" || true
+            echo "===== END $f ====="
+          done < /tmp/files.txt
