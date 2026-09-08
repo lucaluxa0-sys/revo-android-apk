@@ -1,0 +1,56 @@
+name: Diagnose Revolution Gather pattern dataset
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-pattern-dataset.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download current public pattern datasets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL -o /tmp/patterns-v8.bin https://raw.githubusercontent.com/nosyliam/revolution-macro/main/datasets/v8/patterns.bin
+          curl -fL -o /tmp/patterns-prerelease.bin https://raw.githubusercontent.com/nosyliam/revolution-macro/main/datasets/prerelease/patterns.bin
+          sha256sum /tmp/patterns-*.bin
+          file /tmp/patterns-*.bin
+          ls -l /tmp/patterns-*.bin
+      - name: Inspect headers and embedded strings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in /tmp/patterns-v8.bin /tmp/patterns-prerelease.bin; do
+            echo "===== $f HEADER ====="
+            xxd -g1 -l 512 "$f"
+            echo "===== $f STRINGS ====="
+            strings -a -n 3 "$f" | head -n 500
+          done
+      - name: Probe common encodings
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import gzip,zlib,bz2,lzma,json,pickle
+          for name in ['v8','prerelease']:
+              b=Path('/tmp/patterns-'+name+'.bin').read_bytes()
+              print('\n===',name,'len',len(b),'prefix',b[:32].hex(),'===')
+              for enc in ['utf8','utf16le']:
+                  try:
+                      s=b.decode(enc)
+                      print(enc,'decoded',repr(s[:300]))
+                  except Exception as e: print(enc,'no',type(e).__name__)
+              for label,fn in [('gzip',gzip.decompress),('zlib',zlib.decompress),('bz2',bz2.decompress),('lzma',lzma.decompress)]:
+                  try:
+                      out=fn(b); print(label,'OK len',len(out),'prefix',repr(out[:300]))
+                  except Exception as e: print(label,'no',type(e).__name__)
+          PY
