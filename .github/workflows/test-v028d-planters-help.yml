@@ -1,0 +1,129 @@
+name: Test v0.2.8.1 Auto-Planters schema and help
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patches/android-backend-v0.2.8.1.js'
+      - '.github/workflows/test-v028d-planters-help.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android15:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Prepare v0.2.8.1 diagnostic APK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          mkdir -p .cache revo-android/app/src/main/assets/www
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www /tmp/hashprobe/node_modules/rollup/dist/native.js
+          JS=$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
+          python3 tools/patch-revo-frontend-v028.py "$JS"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          mkdir -p /tmp/revo-icon revo-android/app/src/main/res/drawable-nodpi
+          (cd /tmp/revo-icon && 7z x -y "$GITHUB_WORKSPACE/.cache/RevolutionMacro.exe" '.rsrc/0/ICON/1' >/dev/null)
+          cp /tmp/revo-icon/.rsrc/0/ICON/1 revo-android/app/src/main/res/drawable-nodpi/revo_icon.png
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, textwrap
+          manifest=Path('revo-android/app/src/main/AndroidManifest.xml')
+          ms=manifest.read_text()
+          ms=re.sub(r'\s+android:icon="[^"]*"','',ms)
+          ms=re.sub(r'\s+android:roundIcon="[^"]*"','',ms)
+          ms=ms.replace('<application','<application\n        android:icon="@drawable/revo_icon"\n        android:roundIcon="@drawable/revo_icon"',1)
+          manifest.write_text(ms)
+
+          p=Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s=p.read_text()
+          s=s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s=s.replace('web.setWebChromeClient(new WebChromeClient());', '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+          marker='web.loadUrl("https://revo.local/index.android.html");'
+          probe=textwrap.dedent(r'''
+          web.loadUrl("https://revo.local/index.android.html");
+          Handler gate = new Handler(Looper.getMainLooper());
+          gate.postDelayed(() -> web.evaluateJavascript(
+          "(async()=>{const sleep=ms=>new Promise(r=>setTimeout(r,ms));const visible=e=>!!e&&e.getClientRects().length>0&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden';const txt=e=>(e.innerText||e.textContent||'').trim();const btns=()=>[...document.querySelectorAll('button')].filter(visible);const exact=t=>btns().find(b=>txt(b)===t);const tap=e=>{if(!e)return false;e.scrollIntoView({block:'center'});e.click();return true};const out={};try{out.schema=window.RevoAndroidDebug&&window.RevoAndroidDebug.autoPlanterSchema&&window.RevoAndroidDebug.autoPlanterSchema();out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;tap(exact('Planters'));await sleep(500);const open=exact('Auto-Planters');out.openButton=!!open;tap(open);await sleep(700);let dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);out.dialogCount=dialogs.length;let d=dialogs.find(x=>txt(x).includes('Auto-Planters'));out.autoDialog=!!d;out.dialogText=d?txt(d).slice(0,500):'';const helps=d?[...d.querySelectorAll('button[aria-label=Help]')].filter(visible):[];out.helpCount=helps.length;tap(helps[0]);await sleep(250);const popup=document.querySelector('[data-revo-help-popup]');out.helpPopup=!!popup&&visible(popup);out.helpText=popup?txt(popup).slice(0,300):'';tap(document.querySelector('button[aria-label=\"Close help\"]'));await sleep(150);out.helpClosed=!document.querySelector('[data-revo-help-popup]');d=[...document.querySelectorAll('[role=dialog]')].filter(visible).find(x=>txt(x).includes('Auto-Planters'));const close=d&&[...d.querySelectorAll('button')].find(b=>(b.getAttribute('aria-label')||'').toLowerCase().includes('close'));out.closeFound=!!close;tap(close);await sleep(300);out.modalClosed=![...document.querySelectorAll('[role=dialog]')].filter(visible).some(x=>txt(x).includes('Auto-Planters'));out.discordPrompt=(document.body.innerText||'').includes('Discord Rich Presence')&&(document.body.innerText||'').includes('Enable');console.error('RevoV028DProbe '+JSON.stringify(out));}catch(e){console.error('RevoV028DProbe ERROR '+String(e)+' '+(e&&e.stack||''));}})()",
+          value -> Log.e("RevoV028DGate", String.valueOf(value))), 15000);
+          ''').strip()
+          if marker not in s: raise SystemExit('loadUrl marker missing')
+          p.write_text(s.replace(marker,probe,1))
+          PY
+          gradle -p revo-android --stacktrace :app:assembleDebug
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Exercise Auto-Planters modal and help on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            mkdir -p emulator-artifacts
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 22
+            adb exec-out screencap -p > emulator-artifacts/revo-v028d.png
+            adb logcat -d -v time > emulator-artifacts/logcat-v028d.txt
+            grep 'RevoV028DProbe {' emulator-artifacts/logcat-v028d.txt | tail -n1 > emulator-artifacts/probe.txt
+            cat emulator-artifacts/probe.txt
+            grep -q '"backend":"0.2.8.1"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"type"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"field"' emulator-artifacts/probe.txt
+            grep -q '"keyField":"planter"' emulator-artifacts/probe.txt
+            grep -q '"openButton":true' emulator-artifacts/probe.txt
+            grep -q '"autoDialog":true' emulator-artifacts/probe.txt
+            grep -Eq '"helpCount":[1-9][0-9]*' emulator-artifacts/probe.txt
+            grep -q '"helpPopup":true' emulator-artifacts/probe.txt
+            grep -q '"helpClosed":true' emulator-artifacts/probe.txt
+            grep -q '"closeFound":true' emulator-artifacts/probe.txt
+            grep -q '"modalClosed":true' emulator-artifacts/probe.txt
+            grep -q '"discordPrompt":false' emulator-artifacts/probe.txt
+            ! grep -q "Cannot read properties of undefined (reading 'Concrete')" emulator-artifacts/logcat-v028d.txt
+            echo 'PASS: Auto-Planters modal and Android help overlay work without grey-screen crash'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v028d-planters-help-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
