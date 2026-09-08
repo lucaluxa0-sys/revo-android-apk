@@ -20,7 +20,7 @@ if old_help not in s:
 s = s.replace(old_help, new_help, 1)
 
 old_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:null,size:460,styles:{content:{padding:0},header:{display:"none"}}'''
-new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:e.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",gap:8},children:[e.jsx("span",{children:"Auto-Planters"}),e.jsx("button",{type:"button","aria-label":"Close Auto-Planters",onClick:o=>{o.stopPropagation(),n(!1)},style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:30,height:30,padding:0,border:0,borderRadius:6,background:"transparent",color:"inherit",fontSize:22,lineHeight:1,cursor:"pointer"},children:"×"})]}),size:460,styles:{content:{padding:0},header:{padding:"8px 12px 4px",minHeight:36},title:{width:"100%"}}'''
+new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i),[r,c]=k.useState(t),o=()=>{c(!1),n(!1)};return k.useEffect(()=>{c(t),t&&u(i)},[t,i]),e.jsx(rt,{opened:r,onClose:o,withCloseButton:!1,title:e.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",gap:8},children:[e.jsx("span",{children:"Auto-Planters"}),e.jsx("button",{type:"button","aria-label":"Close Auto-Planters",onClick:a=>{a.stopPropagation(),o()},style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:30,height:30,padding:0,border:0,borderRadius:6,background:"transparent",color:"inherit",fontSize:22,lineHeight:1,cursor:"pointer"},children:"×"})]}),size:460,styles:{content:{padding:0},header:{padding:"8px 12px 4px",minHeight:36},title:{width:"100%"}}'''
 if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
@@ -31,4 +31,4 @@ s = s.replace(old_auto, new_auto, 1)
 s += '\n/* android-auto-planters-patch-marker title:"Auto-Planters" */\n'
 
 p.write_text(s, encoding="utf-8")
-print("PASS: patched Revo help controls for tap and added explicit Auto-Planters close button")
+print("PASS: patched Revo tap-help and Auto-Planters with local+parent close state")
