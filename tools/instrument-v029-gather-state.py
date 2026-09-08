@@ -37,8 +37,10 @@ marker = 'web.loadUrl("https://revo.local/index.android.html");'
 if marker not in s:
     raise SystemExit("loadUrl marker missing")
 
-# Java source containing a JS IIFE. Keep it a single Java string literal so the
-# generated source is boring and deterministic.
+# Never call dataRuntime.Preset() here: in the current Revo frontend that helper
+# uses React hooks and throws React invariant #321 when invoked outside React.
+# presetObject(name) is the non-React runtime accessor already used by our
+# Android backend overlays.
 js = r'''(()=>{try{
 const rt=window.dataRuntime;if(!rt)return 'missing-dataRuntime';
 const out={};
@@ -48,8 +50,10 @@ const config=state.Object('config');
 const avail=config.List('availablePatterns');
 out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;
 out.availablePatterns={primitive:!!avail.primitive,keyField:String(avail.keyField||''),count:Array.isArray(avail.values)?avail.values.length:-1,values:Array.isArray(avail.values)?avail.values.slice(0,40).map(v=>{try{return v&&typeof v.Value==='function'?v.Value():v}catch(e){return String(v)}}):[]};
-const preset=rt.Preset();
-out.presetName=rt.preset||rt.defaultPreset||'';
+const presetName=String(rt.preset||rt.defaultPreset||'Default');
+if(typeof rt.presetObject!=='function')throw new Error('presetObject unavailable');
+const preset=rt.presetObject(presetName);
+out.presetName=presetName;
 const active=preset.Object('patterns').List('active');
 out.activeMeta={primitive:!!active.primitive,keyField:String(active.keyField||''),count:Array.isArray(active.values)?active.values.length:-1};
 const keys=['gatherPattern','seconds','backpackPercent','walkReturn','invertFB','invertLR','shiftLock','zoom','length','width','distance','alignment','repetitions','driftComp','position','yaw','pitch'];
