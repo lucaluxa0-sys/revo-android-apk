@@ -125,6 +125,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import textwrap
           p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
           s = p.read_text()
           s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
@@ -132,14 +133,16 @@ jobs:
               'web.setWebChromeClient(new WebChromeClient());',
               '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
           marker = 'web.loadUrl("https://revo.local/index.android.html");'
-          probe = r'''web.loadUrl("https://revo.local/index.android.html");
-        Handler assetProbeHandler = new Handler(Looper.getMainLooper());
-        assetProbeHandler.postDelayed(() -> {
-            if (web == null) return;
-            web.evaluateJavascript(
-                "(async()=>{try{const m=await (await fetch('/revo-png-manifest.json',{cache:'no-store'})).json();const rows=await Promise.all(m.assets.map(async n=>{try{const r=await fetch('/assets/'+n,{cache:'no-store'});const b=await r.blob();return {n,ok:r.ok,status:r.status,size:b.size,type:r.headers.get('content-type')||''};}catch(e){return {n,ok:false,error:String(e)};}}));const bad=rows.filter(x=>!x.ok||x.size<100);const domImgs=[...document.images];const domBroken=domImgs.filter(x=>x.complete&&x.naturalWidth===0).map(x=>x.src);console.error('RevoAssetProbe '+JSON.stringify({manifest:m.count,fetched:rows.length,good:rows.length-bad.length,bad:bad.slice(0,10),domImages:domImgs.length,domBroken:domBroken.slice(0,10),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,backend:window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion}));}catch(e){console.error('RevoAssetProbe ERROR '+String(e));}})()",
-                value -> Log.e("RevoAssetSchedule", String.valueOf(value)));
-        }, 18000);'''
+          probe = textwrap.dedent(r'''
+              web.loadUrl("https://revo.local/index.android.html");
+              Handler assetProbeHandler = new Handler(Looper.getMainLooper());
+              assetProbeHandler.postDelayed(() -> {
+                  if (web == null) return;
+                  web.evaluateJavascript(
+                      "(async()=>{try{const m=await (await fetch('/revo-png-manifest.json',{cache:'no-store'})).json();const rows=await Promise.all(m.assets.map(async n=>{try{const r=await fetch('/assets/'+n,{cache:'no-store'});const b=await r.blob();return {n,ok:r.ok,status:r.status,size:b.size,type:r.headers.get('content-type')||''};}catch(e){return {n,ok:false,error:String(e)};}}));const bad=rows.filter(x=>!x.ok||x.size<100);const domImgs=[...document.images];const domBroken=domImgs.filter(x=>x.complete&&x.naturalWidth===0).map(x=>x.src);console.error('RevoAssetProbe '+JSON.stringify({manifest:m.count,fetched:rows.length,good:rows.length-bad.length,bad:bad.slice(0,10),domImages:domImgs.length,domBroken:domBroken.slice(0,10),runtime:typeof window.runtime,dataRuntime:typeof window.dataRuntime,backend:window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion}));}catch(e){console.error('RevoAssetProbe ERROR '+String(e));}})()",
+                      value -> Log.e("RevoAssetSchedule", String.valueOf(value)));
+              }, 18000);
+          ''').strip()
           if marker not in s:
               raise SystemExit('MainActivity loadUrl marker not found')
           s = s.replace(marker, probe, 1)
