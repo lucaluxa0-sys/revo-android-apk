@@ -1,0 +1,54 @@
+name: Diagnose Revolution pattern loader
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-pattern-loader.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Download exact current public EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  /tmp/RevolutionMacro.exe' | sha256sum -c -
+      - name: Inspect Go build metadata
+        shell: bash
+        run: |
+          go version -m /tmp/RevolutionMacro.exe || true
+      - name: Search executable strings around patterns and crypto
+        shell: bash
+        run: |
+          set +e
+          strings -a -n 5 /tmp/RevolutionMacro.exe > /tmp/revo.strings
+          echo '===== PATTERN / DATASET STRINGS ====='
+          grep -inE 'patterns\.bin|datasets/|datasets\\|/patterns|pattern(s)? (data|dataset|version)|availablePatterns|gatherPattern' /tmp/revo.strings | head -n 400
+          echo '===== CRYPTO / SERIALIZATION STRINGS ====='
+          grep -inE 'crypto/(aes|cipher|sha|chacha)|aes\.|cipher\.|NewGCM|gcm|chacha|xchacha|encoding/gob|gob\.|msgpack|protobuf|json\.Unmarshal|zstd|flate|gzip|lz4|Decode|Decrypt' /tmp/revo.strings | head -n 600
+          echo '===== URL / VERSION STRINGS ====='
+          grep -inE 'revolution-macro/(main|raw)|raw\.githubusercontent|github\.com/nosyliam|versions/v8|datasets/v8|prerelease' /tmp/revo.strings | head -n 300
+          exit 0
+      - name: Inspect Go symbols around loaders
+        shell: bash
+        run: |
+          set +e
+          go tool nm -size -sort address /tmp/RevolutionMacro.exe > /tmp/revo.nm 2>/tmp/nm.err
+          echo '===== NM ERROR ====='; cat /tmp/nm.err
+          echo '===== PATTERN SYMBOLS ====='
+          grep -iE 'pattern|dataset|gather' /tmp/revo.nm | head -n 800
+          echo '===== CRYPTO / DECODE SYMBOLS ====='
+          grep -iE 'decrypt|decode|unmarshal|aes|gcm|chacha|gob|msgpack|zstd' /tmp/revo.nm | head -n 800
+          exit 0
