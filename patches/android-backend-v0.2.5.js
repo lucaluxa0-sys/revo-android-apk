@@ -139,7 +139,7 @@
     if ((runtime.defaultPreset || 'Default') === oldKey) {
       await setAccountPreset('Default', v.name);
     }
-    for (const [account, obj] of Object.entries(accountObjects())) {
+    for (const [, obj] of Object.entries(accountObjects())) {
       if (obj && obj.Concrete && obj.Concrete('preset') === oldKey) obj.Set('preset', v.name);
     }
 
@@ -160,7 +160,7 @@
     const runtime = rt();
 
     if ((runtime.defaultPreset || 'Default') === key) await setAccountPreset('Default', fallback);
-    for (const [account, obj] of Object.entries(accountObjects())) {
+    for (const [, obj] of Object.entries(accountObjects())) {
       if (obj && obj.Concrete && obj.Concrete('preset') === key) obj.Set('preset', fallback);
     }
     if (runtime.preset === key) runtime.setPreset(fallback);
@@ -193,16 +193,24 @@
     macro.ResetSettings = resetSettings;
 
     // v0.2.4 persists settings/accounts, but defaultPreset is a critical state value.
-    // Restore it from a tiny dedicated per-Android-user key after preload is ready.
+    // Wait until the preload is complete so a saved custom preset already exists before restoring it.
+    let restoreAttempts = 0;
     const restoreDefaultPreset = () => {
+      restoreAttempts += 1;
       try {
+        const runtime = rt();
+        if (runtime.IsPreloaded && !runtime.IsPreloaded()) {
+          if (restoreAttempts < 240) setTimeout(restoreDefaultPreset, 25);
+          return;
+        }
         const saved = localStorage.getItem(DEFAULT_PRESET_KEY);
-        if (saved && presetExists(saved)) rt().Object('state').Set('defaultPreset', saved);
+        if (saved && presetExists(saved)) runtime.Object('state').Set('defaultPreset', saved);
       } catch (e) {
         console.error('[android-backend] default preset restore failed', e);
+        if (restoreAttempts < 240) setTimeout(restoreDefaultPreset, 25);
       }
     };
-    setTimeout(restoreDefaultPreset, 150);
+    setTimeout(restoreDefaultPreset, 25);
 
     window.RevoAndroidDebug = window.RevoAndroidDebug || {};
     window.RevoAndroidDebug.backendVersion = '0.2.5';
