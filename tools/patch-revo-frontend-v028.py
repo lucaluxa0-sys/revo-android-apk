@@ -19,11 +19,11 @@ if old_help not in s:
     raise SystemExit("v0.2.8 help component target not found; refusing unsafe patch")
 s = s.replace(old_help, new_help, 1)
 
-old_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:null,size:460'''
-new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!0,title:"Auto-Planters",size:460'''
+old_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!1,title:null,size:460,styles:{content:{padding:0},header:{display:"none"}}'''
+new_auto = '''ay=({open:t,onOpenChange:n,initialTab:i="settings"})=>{const[s,u]=k.useState(i);return k.useEffect(()=>{t&&u(i)},[t,i]),e.jsx(rt,{opened:t,onClose:()=>n(!1),withCloseButton:!0,title:"Auto-Planters",size:460,styles:{content:{padding:0},header:{padding:"8px 12px 4px",minHeight:36}}'''
 if old_auto not in s:
     raise SystemExit("v0.2.8 Auto-Planters modal target not found; refusing unsafe patch")
 s = s.replace(old_auto, new_auto, 1)
 
 p.write_text(s, encoding="utf-8")
-print("PASS: patched Revo help controls for tap and added Auto-Planters close button")
+print("PASS: patched Revo help controls for tap and made Auto-Planters modal closable")
