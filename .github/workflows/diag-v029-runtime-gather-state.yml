@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/diag-v029-runtime-gather-state.yml'
+      - 'tools/v029-gather-state-probe.js'
 
 permissions:
   contents: read
@@ -25,17 +26,15 @@ jobs:
           gradle-version: '8.13'
       - uses: android-actions/setup-android@v3
 
-      - name: Prepare diagnostic APK from current green runtime stack
+      - name: Prepare diagnostic APK
         shell: bash
         run: |
-          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
           unzip -q /tmp/source.zip
           mkdir -p .cache revo-android/app/src/main/assets/www
-          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
-            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
           python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
           cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
@@ -50,19 +49,27 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
-          s=p.read_text()
-          s=s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
-          s=s.replace('web.setWebChromeClient(new WebChromeClient());', '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
-          marker='web.loadUrl("https://revo.local/index.android.html");'
-          injected=r'''web.loadUrl("https://revo.local/index.android.html");
-        Handler v029Probe = new Handler(Looper.getMainLooper());
-        v029Probe.postDelayed(() -> web.evaluateJavascript(
-            "(()=>{try{const rt=window.dataRuntime;if(!rt)return 'missing-dataRuntime';const out={};const safe=(o,k)=>{try{return o&&typeof o.Concrete==='function'?o.Concrete(k):undefined}catch(e){return 'ERR:'+e}};const state=rt.Object('state');const config=state.Object('config');const avail=config.List('availablePatterns');out.backend=window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion;out.availablePatterns={primitive:!!avail.primitive,keyField:String(avail.keyField||''),count:Array.isArray(avail.values)?avail.values.length:-1,values:Array.isArray(avail.values)?avail.values.slice(0,40).map(v=>{try{return v&&typeof v.Value==='function'?v.Value():v}catch(e){return String(v)}}):[]};const preset=rt.Preset();out.presetName=rt.preset||rt.defaultPreset||'';const active=preset.Object('patterns').List('active');out.activeMeta={primitive:!!active.primitive,keyField:String(active.keyField||''),count:Array.isArray(active.values)?active.values.length:-1};const keys=['gatherPattern','seconds','backpackPercent','walkReturn','invertFB','invertLR','shiftLock','zoom','length','width','distance','alignment','repetitions','driftComp','position','yaw','pitch'];out.active=[];if(Array.isArray(active.values)){for(let i=0;i<Math.min(active.values.length,12);i++){const row=active.values[i];if(!row)continue;const item={index:i,field:safe(row,'field'),order:safe(row,'order')};try{const c=row.Object('config');item.config={};for(const k of keys)item.config[k]=safe(c,k)}catch(e){item.configError=String(e)}out.active.push(item)}}out.runtimeDisconnected=!!rt.disconnected;console.error('RevoV029GatherState '+JSON.stringify(out));return 'ok'}catch(e){console.error('RevoV029GatherState ERROR '+String(e)+' '+(e&&e.stack||''));return 'error'}})()",
-            value -> Log.e("RevoV029Gate", String.valueOf(value))), 17000);'''
-          if marker not in s: raise SystemExit('loadUrl marker missing')
-          p.write_text(s.replace(marker,injected,1))
+          import json
+
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          probe = Path('tools/v029-gather-state-probe.js').read_text()
+          java_probe = json.dumps(probe)
+
+          s = s.replace(
+              'import android.webkit.WebChromeClient;',
+              'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+
+          marker = 'web.loadUrl("https://revo.local/index.android.html");'
+          replacement = marker + f'''\n        Handler v029Probe = new Handler(Looper.getMainLooper());\n        v029Probe.postDelayed(() -> web.evaluateJavascript({java_probe},\n            value -> Log.e("RevoV029Gate", String.valueOf(value))), 17000);'''
+          if marker not in s:
+              raise SystemExit('loadUrl marker missing')
+          p.write_text(s.replace(marker, replacement, 1))
           PY
+
           gradle -p revo-android --stacktrace :app:assembleDebug
 
       - name: Enable KVM
@@ -82,7 +89,6 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
