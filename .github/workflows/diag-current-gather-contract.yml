@@ -1,0 +1,40 @@
+name: Diagnose current Revo gather runtime contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-current-gather-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract pinned frontend and map Gather data accesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  /tmp/RevolutionMacro.exe" | sha256sum -c -
+          mkdir -p /tmp/www
+          python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
+          JS=$(find /tmp/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
+          python3 - "$JS" <<'PY'
+          import re, sys
+          from pathlib import Path
+          s=Path(sys.argv[1]).read_text(errors='replace')
+          terms=['gatherPattern','sequence','patterns.active','backpackPercent','invertFB','invertLR','seconds','length','width','distance','repetitions']
+          for term in terms:
+              print(f'===== TERM {term} count={s.count(term)} =====')
+              for m in list(re.finditer(re.escape(term), s))[:40]:
+                  a=max(0,m.start()-450); b=min(len(s),m.end()+700)
+                  print(s[a:b].replace('\n',' '))
+                  print('\n---')
+          PY
