@@ -1,0 +1,11 @@
+.root {
+    border-right: 1px solid;
+
+    &[data-disabled] {
+        background-color: var(--mantine-color-blue-8);
+    }
+}
+
+.label {
+    margin-left: auto;
+}

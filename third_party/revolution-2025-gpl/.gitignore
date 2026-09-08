@@ -1,0 +1,7 @@
+.idea/
+ocrs/**
+vendor/
+frontend/node_modules/
+frontend/dist/
+opencv/bin
+opencv/include

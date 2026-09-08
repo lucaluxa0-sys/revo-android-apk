@@ -1,0 +1,21 @@
+SetName("vic_spider")
+
+KeyPress(Key.E)
+Sleep(900)
+KeyPress(Key.Space)
+KeyPress(Key.Space)
+Sleep(175)
+KeyPress(Key.Space)
+Sleep(1000)
+for i = 1, 4 do
+    KeyPress(Key.RotLeft)
+end
+Walk(Direction.Forward, 56)
+Walk(Direction.Left, 20)
+Walk(Direction.Backward, 64)
+Walk(Direction.Right, 40)
+Walk(Direction.Forward, 64)
+Walk(Direction.Left, 60)
+Walk(Direction.Backward, 64)
+Walk(Direction.Right, 80)
+Walk(Direction.Forward, 64)

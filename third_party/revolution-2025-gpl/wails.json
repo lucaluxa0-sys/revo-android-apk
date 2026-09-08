@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Revolution Macro",
+  "outputfilename": "revolution",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "nosyliam",
+    "email": "liam@metaprov.com"
+  },
+  "info": {
+    "productName": "Revolution Macro",
+    "productVersion": "0.0.1",
+    "copyright": "Copyright © 2024 nosyliam"
+  }
+}

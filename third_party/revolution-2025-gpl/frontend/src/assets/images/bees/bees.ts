@@ -1,0 +1,71 @@
+import baby from './baby.png';
+import bomber from './bomber.png';
+import brave from './brave.png';
+import bubble from './bubble.png';
+import bucko from './bucko.png';
+import bumble from './bumble.png';
+import buoyant from './buoyant.png';
+import carp from './carp.png';
+import commander from './commander.png';
+import cool from './cool.png';
+import demo from './demo.png';
+import demon from './demon.png';
+import diamond from './diamond.png';
+import exhausted from './exhausted.png';
+import fire from './fire.png';
+import frosty from './frosty.png';
+import fuzzy from './fuzzy.png';
+import hasty from './hasty.png';
+import honey from './honey.png';
+import lion from './lion.png';
+import looker from './looker.png';
+import music from './music.png';
+import ninja from './ninja.png';
+import precise from './precise.png';
+import rad from './rad.png';
+import rage from './rage.png';
+import rascal from './rascal.png';
+import riley from './riley.png';
+import shocked from './shocked.png';
+import shy from './shy.png';
+import spicy from './spicy.png';
+import stubborn from './stubborn.png';
+import tad from './tad.png';
+import vector from './vector.png'
+
+export const Bees: {[key: string]: [string, string]} = {
+    "bomber": ["Bomber Bee", bomber],
+    "brave": ["Brave Bee", brave],
+    "bumble": ["Bumble Bee", bumble],
+    "cool": ["Cool Bee", cool],
+    "hasty": ["Hasty Bee", hasty],
+    "looker": ["Looker Bee", looker],
+    "rad": ["Rad Bee", rad],
+    "rascal": ["Rascal Bee", rascal],
+    "stubborn": ["Stubborn Bee", stubborn],
+    "bubble": ["Bubble Bee", bubble],
+    "bucko": ["Bucko Bee", bucko],
+    "commander": ["Commander Bee", commander],
+    "demo": ["Demo Bee", demo],
+    "exhausted": ["Exhausted Bee", exhausted],
+    "fire": ["Fire Bee", fire],
+    "frosty": ["Frosty Bee", frosty],
+    "honey": ["Honey Bee", honey],
+    "rage": ["Rage Bee", rage],
+    "riley": ["Riley Bee", riley],
+    "shocked": ["Shocked Bee", shocked],
+    "baby": ["Baby Bee", baby],
+    "carp": ["Carp Bee", carp],
+    "demon": ["Demon Bee", demon],
+    "diamond": ["Diamond Bee", diamond],
+    "lion": ["Lion Bee", lion],
+    "music": ["Music Bee", music],
+    "ninja": ["Ninja Bee", ninja],
+    "shy": ["Shy Bee", shy],
+    "buoyant": ["Buoyant Bee", buoyant],
+    "fuzzy": ["Fuzzy Bee", fuzzy],
+    "precise": ["Precise Bee", precise],
+    "spicy": ["Spicy Bee", spicy],
+    "tad": ["Tad Bee", tad],
+    "vector": ["Vector Bee", vector]
+}

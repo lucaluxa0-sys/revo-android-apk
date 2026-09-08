@@ -1,0 +1,12 @@
+SetName("vic_mountain")
+
+Sleep(500)
+KeyPress(Key.E)
+Sleep(2500)
+Walk(Direction.Backward, 20)
+Walk(Direction.Left, 24)
+Walk(Direction.Forward, 76)
+Walk(Direction.Right, 24)
+Walk(Direction.Backward, 76)
+Walk(Direction.Right, 24)
+Walk(Direction.Forward, 72)
