@@ -23,13 +23,26 @@ jobs:
           mkdir -p /tmp/www
           python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
 
-      - name: Inspect Gather add-field component and field schema
+      - name: Inspect Android Java implementation
+        shell: bash
+        run: |
+          for f in revo-android/app/src/main/java/com/revolution/android/*.java; do
+            echo "===== $f ====="
+            sed -n '1,420p' "$f"
+          done
+
+      - name: Trace Gather field add, help overlays, planters and logs
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           s=Path('/tmp/www/assets/index-2FXaJy0P.js').read_text(errors='ignore')
-          terms=['onAddField','function vv','const vv=','vv=(', 'identity:t', 'Object("gather")', '.Object("gather")', 'fields",', 'fieldOrder', 'gatherFields', 'Field Config']
+          terms=[
+            'AddDefaultField','DeleteField','Automatic Planters','Auto Planters','planter schedule',
+            'Tooltip(','.Tooltip(', 'tooltip:{text:', 'Question', 'Help', 'withArrow',
+            'OpenLogsFolder','CopyLogsFile','Logs','logLines','macroLog','activityLog',
+            'Start(', 'Pause(', 'Stop(', 'startup:done'
+          ]
           for term in terms:
             print('\n===== '+term+' =====')
             p=0;c=0
@@ -37,12 +50,12 @@ jobs:
               i=s.find(term,p)
               if i<0: break
               print('OFFSET',i)
-              print(s[max(0,i-2600):min(len(s),i+5200)].replace('\n',' '))
+              print(s[max(0,i-2200):min(len(s),i+5000)].replace('\n',' '))
               print('\n---')
               p=i+len(term);c+=1
           PY
 
-      - name: Recover exact Vite PNGs by Rollup hash
+      - name: Recover exact Vite PNGs by Rollup hash and icon
         shell: bash
         run: |
           mkdir -p /tmp/hashprobe
@@ -72,33 +85,13 @@ jobs:
           }
           const pngs=carvePngs(exe);
           const byHash=new Map();
-          for(const p of pngs){
-            const h=xxhashBase64Url(p.data).slice(0,8);
-            if(!byHash.has(h)) byHash.set(h,[]);
-            byHash.get(h).push(p);
-          }
+          for(const p of pngs){const h=xxhashBase64Url(p.data).slice(0,8);if(!byHash.has(h))byHash.set(h,[]);byHash.get(h).push(p);}
           let matched=0;
-          for(const name of refs){
-            const h=name.slice(-12,-4); // 8 chars immediately before .png
-            const hits=byHash.get(h)||[];
-            if(hits.length){matched++;console.log('MATCH',name,h,hits.map(x=>`${x.start}:${x.data.length}`).join(','));}
-            else console.log('MISS ',name,h);
-          }
+          for(const name of refs){const h=name.slice(-12,-4);const hits=byHash.get(h)||[];if(hits.length)matched++;}
           console.log(`SUMMARY refs=${refs.length} pngs=${pngs.length} matched=${matched}`);
-          if(matched<100) process.exitCode=2;
+          if(matched!==refs.length) process.exitCode=2;
           JS
-
-      - name: Extract real Revolution app icon
-        shell: bash
-        run: |
           rm -rf /tmp/revo-pe && mkdir -p /tmp/revo-pe
           cd /tmp/revo-pe
           7z x -y /tmp/RevolutionMacro.exe '.rsrc/0/ICON/1' >/dev/null
-          find . -type f -maxdepth 6 -print -exec file {} \;
-          python3 - <<'PY'
-          from pathlib import Path
-          files=[p for p in Path('/tmp/revo-pe').rglob('*') if p.is_file()]
-          for p in files:
-            b=p.read_bytes()
-            print('ICONFILE',p,'SIZE',len(b),'PNG',b[:8]==b'\x89PNG\r\n\x1a\n')
-          PY
+          file ./.rsrc/0/ICON/1
