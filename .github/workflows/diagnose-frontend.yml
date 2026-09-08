@@ -1,0 +1,87 @@
+name: Diagnose Revo frontend compatibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diagnose-frontend.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-android-source.zip
+          unzip -q /tmp/revo-android-source.zip
+
+      - name: Show Android source paths relevant to asset serving
+        shell: bash
+        run: |
+          echo '===== extract_revo_frontend.py ====='
+          sed -n '1,260p' revo-android/extract_revo_frontend.py
+          echo '===== MainActivity.java ====='
+          sed -n '1,360p' revo-android/app/src/main/java/com/revolution/android/MainActivity.java
+
+      - name: Download exact Revolution Macro release
+        shell: bash
+        run: |
+          mkdir -p .cache
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+
+      - name: Extract frontend
+        shell: bash
+        run: |
+          mkdir -p /tmp/www
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/www
+          echo '===== EXTRACTED FILES ====='
+          find /tmp/www -type f -printf '%P\n' | sort
+
+      - name: Trace field-add calls and image URLs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('/tmp/www')
+          texts = []
+          for p in root.rglob('*'):
+              if p.is_file() and p.suffix.lower() in {'.js','.html','.css','.json'}:
+                  try: texts.append((p, p.read_text(errors='ignore')))
+                  except Exception: pass
+
+          terms = ['AddDefaultField','DeleteField','5 Bee Zone','Sunflower Field','Field Defaults','defaultFields']
+          for term in terms:
+              print(f'===== TERM {term!r} =====')
+              found = False
+              for p,s in texts:
+                  start = 0
+                  while True:
+                      i = s.find(term, start)
+                      if i < 0: break
+                      found = True
+                      a=max(0,i-900); b=min(len(s),i+1600)
+                      print(f'--- {p.relative_to(root)} @ {i} ---')
+                      print(s[a:b].replace('\n',' '))
+                      start=i+len(term)
+              if not found: print('NOT FOUND')
+
+          print('===== IMAGE-LIKE REFERENCES =====')
+          refs=set()
+          pat=re.compile(r'''["']([^"']+\.(?:png|jpe?g|webp|gif|svg|ico))(?:\?[^"']*)?["']''',re.I)
+          for p,s in texts:
+              for m in pat.finditer(s): refs.add(m.group(1))
+          for r in sorted(refs):
+              exists=(root/r.lstrip('/')).exists()
+              print(('OK      ' if exists else 'MISSING ') + r)
+          PY
