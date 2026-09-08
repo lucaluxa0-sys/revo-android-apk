@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Extract exact Auto-Planters panel context
+      - name: Extract exact Auto-Planters receiver summary
         shell: bash
         run: |
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
@@ -27,64 +27,68 @@ jobs:
           curl -fL --retry 4 --retry-delay 2 -o /tmp/RevolutionMacro.exe https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           python3 revo-android/extract_revo_frontend.py /tmp/RevolutionMacro.exe /tmp/www
           JS=$(find /tmp/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
-          python3 - "$JS" diagnostics/auto-planters-panel.txt <<'PY'
+          python3 - "$JS" diagnostics/auto-planters-summary.txt <<'PY'
           from pathlib import Path
           import re, sys
 
           src = Path(sys.argv[1]).read_text(errors='ignore')
-          out = []
-          def section(title, text):
-              out.append(f"\n===== {title} =====\n{text}\n")
-
-          for term in ['children:"Auto-Planters"', 'Z1=', 'ey=', 'ny=', 'sy=', 'ay=({open']:
-              pos = 0
-              found = 0
-              while True:
-                  i = src.find(term, pos)
-                  if i < 0: break
-                  found += 1
-                  section(f"TERM {term} #{found} OFFSET {i}", src[max(0, i-5000):min(len(src), i+18000)])
-                  pos = i + len(term)
-              if not found:
-                  section(f"TERM {term}", 'NOT FOUND')
-
-          # Collect every .Concrete(...) call near the Auto-Planters label so the
-          # Android runtime can seed the exact objects the current frontend expects.
           label = src.find('children:"Auto-Planters"')
-          if label >= 0:
-              win_start = max(0, label - 30000)
-              win_end = min(len(src), label + 80000)
-              window = src[win_start:win_end]
-              calls = []
-              for m in re.finditer(r'(.{0,180}?\.Concrete\([^)]{0,180}\))', window):
-                  snippet = m.group(1).replace('\n', ' ')
-                  calls.append(f"ABS_OFFSET {win_start + m.start()} :: {snippet}")
-              section('CONCRETE CALLS NEAR AUTO-PLANTERS', '\n'.join(calls) if calls else 'NONE')
+          if label < 0:
+              raise SystemExit('Auto-Planters label not found')
+          lo = max(0, label - 35000)
+          hi = min(len(src), label + 90000)
+          win = src[lo:hi]
 
-          # Also collect Object/List chains around planter strings. This is useful
-          # when the undefined value is an intermediate Object()/List() result.
-          planter_hits = []
-          for m in re.finditer(r'(?i)planter', src):
-              i = m.start()
-              chunk = src[max(0, i-400):min(len(src), i+900)]
-              if '.Concrete(' in chunk or '.Object(' in chunk or '.List(' in chunk:
-                  planter_hits.append(f"OFFSET {i}\n{chunk}")
-                  if len(planter_hits) >= 120:
-                      break
-          section('PLANTER OBJECT/LIST/CONCRETE CONTEXTS', '\n\n---\n'.join(planter_hits))
+          lines = [f'label_offset={label}', f'window={lo}:{hi}', '']
+          seen = set()
+          receiver_re = re.compile(r'([A-Za-z_$][\w$]*(?:(?:\.[A-Za-z_$][\w$]*)|(?:\([^()]{0,100}\))|(?:\[[^\]]{0,80}\])){0,8})\.Concrete\(([^)]{0,120})\)')
+          for m in receiver_re.finditer(win):
+              receiver, arg = m.group(1), m.group(2)
+              key = (receiver, arg)
+              if key in seen: continue
+              seen.add(key)
+              absolute = lo + m.start()
+              context = src[max(0, absolute-220):min(len(src), absolute+420)].replace('\n', ' ')
+              lines += [f'CONCRETE receiver={receiver} arg={arg} offset={absolute}', f'CTX {context}', '']
 
-          Path(sys.argv[2]).write_text(''.join(out), encoding='utf-8')
-          print(f"wrote {sys.argv[2]} ({Path(sys.argv[2]).stat().st_size} bytes)")
+          lines += ['=== OBJECT/LIST/CONCRETE CHAINS ===']
+          chain_re = re.compile(r'[A-Za-z_$][\w$]*(?:(?:\.Object\([^)]{0,100}\))|(?:\.List\([^)]{0,100}\))|(?:\.Concrete\([^)]{0,100}\))){2,}')
+          for m in chain_re.finditer(win):
+              text = m.group(0)
+              if text in seen: continue
+              seen.add(text)
+              lines.append(f'{lo + m.start()} :: {text}')
+
+          lines += ['', '=== DIRECT item.object.Concrete SITES ===']
+          for needle in ['.object.Concrete(', '.Object("autoPlanters")', '.List("nectars")', '.List("fields")', '.List("planters")']:
+              p = 0
+              count = 0
+              while True:
+                  i = win.find(needle, p)
+                  if i < 0: break
+                  count += 1
+                  absolute = lo + i
+                  context = src[max(0, absolute-350):min(len(src), absolute+700)].replace('\n', ' ')
+                  lines += [f'{needle} #{count} offset={absolute}', context, '']
+                  p = i + len(needle)
+                  if count >= 12: break
+
+          # Keep this artifact connector-friendly.
+          text = '\n'.join(lines)
+          if len(text) > 55000:
+              text = text[:55000] + '\nTRUNCATED\n'
+          Path(sys.argv[2]).write_text(text, encoding='utf-8')
+          print(text)
           PY
-      - name: Commit diagnostic output
+      - name: Commit diagnostic summary
         shell: bash
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add diagnostics/auto-planters-panel.txt
+          git add diagnostics/auto-planters-summary.txt
           if git diff --cached --quiet; then
-            echo 'Diagnostic output unchanged'
+            echo 'Diagnostic summary unchanged'
             exit 0
           fi
-          git commit -m 'Record Auto-Planters frontend render context'
+          git commit -m 'Record Auto-Planters receiver summary'
           git push
