@@ -52,17 +52,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
-          curl -fL --retry 4 --retry-delay 2 \
-            -o .cache/RevolutionMacro.exe \
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
           python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
           cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
           npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
-          node tools/recover-vite-pngs.js \
-            .cache/RevolutionMacro.exe \
-            revo-android/app/src/main/assets/www \
-            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          node tools/recover-vite-pngs.js .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www /tmp/hashprobe/node_modules/rollup/dist/native.js
           python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
           cat patches/android-wails-shim-v0.2.4.js \
               patches/android-backend-v0.2.5.js \
@@ -79,61 +75,75 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
           p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
           s = p.read_text()
-          s = s.replace(
-              'import android.webkit.WebChromeClient;',
-              'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;'
-          )
+          if 'import android.webkit.ConsoleMessage;' not in s:
+              s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;')
+          if 'import android.util.Log;' not in s:
+              s = s.replace('import android.webkit.ConsoleMessage;', 'import android.webkit.ConsoleMessage;\nimport android.util.Log;')
           s = s.replace(
               'web.setWebChromeClient(new WebChromeClient());',
-              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });'''
+              'WebView.setWebContentsDebuggingEnabled(true);\n'
+              '        web.setWebChromeClient(new WebChromeClient() {\n'
+              '            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n'
+              '                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n'
+              '                return true;\n'
+              '            }\n'
+              '        });'
           )
-
-          marker = '''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }'''
-          repl = marker + '''\n        android.content.IntentFilter elolGateFilter = new android.content.IntentFilter("com.revolution.android.START_ELOL_GATE");\n        registerReceiver(new android.content.BroadcastReceiver() {\n            @Override public void onReceive(android.content.Context context, android.content.Intent intent) {\n                Log.e("RevoElolGate", "broadcast received");\n                startElolGateWhenReady(0);\n            }\n        }, elolGateFilter, android.content.Context.RECEIVER_EXPORTED);\n        Log.e("RevoElolGate", "receiver registered");'''
+          marker = '        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }'
           if marker not in s:
               raise SystemExit('onCreate autostart marker missing')
-          s = s.replace(marker, repl, 1)
-
-          method = r'''
-    private void startElolGateWhenReady(int attempt) {
-        if (isFinishing() || web == null) return;
-        String script = "(()=>{try{" +
-                "const rt=window.dataRuntime;" +
-                "if(!rt||typeof rt.presetObject!=='function'||!window.go||!window.go.cmd||!window.go.cmd.Macro||!window.AndroidRevo)return 'retry';" +
-                "const preset=rt.presetObject(rt.preset||rt.defaultPreset||'Default');if(!preset)return 'retry';" +
-                "const active=preset.Object('patterns').List('active');active.keyField='id';active.primitive=false;" +
-                "let row=active.Object('android-elol-e2e');if(!row)row=active.Append('android-elol-e2e');" +
-                "row.Set('order',-100);row.Set('field','pinetree');const c=row.Object('config');" +
-                "c.Set('gatherPattern','e_lol');c.Set('seconds',900);c.Set('backpackPercent',90);c.Set('walkReturn',true);" +
-                "c.Set('invertFB',false);c.Set('invertLR',false);c.Set('shiftLock',false);c.Set('zoom',0);" +
-                "c.Set('length',8);c.Set('width',2);c.Set('distance',0);c.Set('alignment',0);c.Set('repetitions',0);" +
-                "c.Set('driftComp',true);c.Set('position','center');c.Set('yaw',0);c.Set('pitch',0);" +
-                "localStorage.setItem('revo.android.msPerStud','12');localStorage.setItem('revo.android.joystickCenterX','0.16');" +
-                "localStorage.setItem('revo.android.joystickCenterY','0.78');localStorage.setItem('revo.android.joystickRadius','0.085');" +
-                "const cfg=window.RevoAndroidDebug&&window.RevoAndroidDebug.engineConfig?window.RevoAndroidDebug.engineConfig('Default'):null;" +
-                "console.error('RevoElolPrepared '+JSON.stringify(cfg));" +
-                "const buttons=[...document.querySelectorAll('button')];const start=buttons.find(x=>(x.innerText||x.textContent||'').trim()==='Start'&&!x.disabled);" +
-                "if(!start){console.error('RevoElolStartButton NOT_FOUND');return 'retry';}" +
-                "console.error('RevoElolStartButton '+JSON.stringify({text:(start.innerText||start.textContent||'').trim(),disabled:!!start.disabled,cls:String(start.className||'')}));" +
-                "start.click();return 'clicked';" +
-                "}catch(e){console.error('RevoElolGate ERROR '+String(e));return 'error';}})()";
-        web.evaluateJavascript(script, value -> {
-            Log.e("RevoElolGateResult", String.valueOf(value));
-            if (String.valueOf(value).contains("retry") && attempt < 80) {
-                new Handler(Looper.getMainLooper()).postDelayed(() -> startElolGateWhenReady(attempt + 1), 250);
-                return;
-            }
-            if (String.valueOf(value).contains("clicked")) {
-                new Handler(Looper.getMainLooper()).postDelayed(() ->
-                        Log.e("RevoElolState", bridge.getEngineState()), 12000);
-            }
-        });
-    }
-'''
-          stop_marker = '''    // Deliberately DO NOT stop MacroEngine here.'''
+          receiver = marker + '\n' + '\n'.join([
+              '        android.content.IntentFilter elolGateFilter = new android.content.IntentFilter("com.revolution.android.START_ELOL_GATE");',
+              '        registerReceiver(new android.content.BroadcastReceiver() {',
+              '            @Override public void onReceive(android.content.Context context, android.content.Intent intent) {',
+              '                Log.e("RevoElolGate", "broadcast received");',
+              '                startElolGateWhenReady(0);',
+              '            }',
+              '        }, elolGateFilter, android.content.Context.RECEIVER_EXPORTED);',
+              '        Log.e("RevoElolGate", "receiver registered");'
+          ])
+          s = s.replace(marker, receiver, 1)
+          method = '\n'.join([
+              '',
+              '    private void startElolGateWhenReady(int attempt) {',
+              '        if (isFinishing() || web == null) return;',
+              '        String script = "(()=>{try{" +',
+              '                "const rt=window.dataRuntime;" +',
+              '                "if(!rt||typeof rt.presetObject!==\\\'function\\\'||!window.go||!window.go.cmd||!window.go.cmd.Macro||!window.AndroidRevo)return \\\'retry\\\';" +',
+              '                "const preset=rt.presetObject(rt.preset||rt.defaultPreset||\\\'Default\\\');if(!preset)return \\\'retry\\\';" +',
+              '                "const active=preset.Object(\\\'patterns\\\').List(\\\'active\\\');active.keyField=\\\'id\\\';active.primitive=false;" +',
+              '                "let row=active.Object(\\\'android-elol-e2e\\\');if(!row)row=active.Append(\\\'android-elol-e2e\\\');" +',
+              '                "row.Set(\\\'order\\\',-100);row.Set(\\\'field\\\',\\\'pinetree\\\');const c=row.Object(\\\'config\\\');" +',
+              '                "c.Set(\\\'gatherPattern\\\',\\\'e_lol\\\');c.Set(\\\'seconds\\\',900);c.Set(\\\'backpackPercent\\\',90);c.Set(\\\'walkReturn\\\',true);" +',
+              '                "c.Set(\\\'invertFB\\\',false);c.Set(\\\'invertLR\\\',false);c.Set(\\\'shiftLock\\\',false);c.Set(\\\'zoom\\\',0);" +',
+              '                "c.Set(\\\'length\\\',8);c.Set(\\\'width\\\',2);c.Set(\\\'distance\\\',0);c.Set(\\\'alignment\\\',0);c.Set(\\\'repetitions\\\',0);" +',
+              '                "c.Set(\\\'driftComp\\\',true);c.Set(\\\'position\\\',\\\'center\\\');c.Set(\\\'yaw\\\',0);c.Set(\\\'pitch\\\',0);" +',
+              '                "localStorage.setItem(\\\'revo.android.msPerStud\\\',\\\'12\\\');localStorage.setItem(\\\'revo.android.joystickCenterX\\\',\\\'0.16\\\');" +',
+              '                "localStorage.setItem(\\\'revo.android.joystickCenterY\\\',\\\'0.78\\\');localStorage.setItem(\\\'revo.android.joystickRadius\\\',\\\'0.085\\\');" +',
+              '                "const cfg=window.RevoAndroidDebug&&window.RevoAndroidDebug.engineConfig?window.RevoAndroidDebug.engineConfig(\\\'Default\\\'):null;" +',
+              '                "console.error(\\\'RevoElolPrepared \\\'+JSON.stringify(cfg));" +',
+              '                "const buttons=[...document.querySelectorAll(\\\'button\\\')];const disable=buttons.find(x=>(x.innerText||x.textContent||\\\'\\\').trim()===\\\'Disable\\\');if(disable){disable.click();return \\\'retry\\\';}" +',
+              '                "const start=buttons.find(x=>(x.innerText||x.textContent||\\\'\\\').trim()===\\\'Start\\\'&&!x.disabled);" +',
+              '                "if(!start){console.error(\\\'RevoElolStartButton NOT_FOUND\\\');return \\\'retry\\\';}" +',
+              '                "console.error(\\\'RevoElolStartButton \\\'+JSON.stringify({text:(start.innerText||start.textContent||\\\'\\\').trim(),disabled:!!start.disabled,cls:String(start.className||\\\'\\\')}));" +',
+              '                "start.click();return \\\'clicked\\\';" +',
+              '                "}catch(e){console.error(\\\'RevoElolGate ERROR \\\'+String(e));return \\\'error\\\';}})()";',
+              '        web.evaluateJavascript(script, value -> {',
+              '            Log.e("RevoElolGateResult", String.valueOf(value));',
+              '            if (String.valueOf(value).contains("retry") && attempt < 80) {',
+              '                new Handler(Looper.getMainLooper()).postDelayed(() -> startElolGateWhenReady(attempt + 1), 250);',
+              '                return;',
+              '            }',
+              '            if (String.valueOf(value).contains("clicked")) {',
+              '                new Handler(Looper.getMainLooper()).postDelayed(() -> Log.e("RevoElolState", bridge.getEngineState()), 12000);',
+              '            }',
+              '        });',
+              '    }',
+              ''
+          ])
+          stop_marker = '    // Deliberately DO NOT stop MacroEngine here.'
           if stop_marker not in s:
               raise SystemExit('class insertion marker missing')
           s = s.replace(stop_marker, method + '\n' + stop_marker, 1)
@@ -197,7 +207,6 @@ jobs:
           EOF
           cat > fake-roblox/app/src/main/java/com/roblox/client/MainActivity.java <<'EOF'
           package com.roblox.client;
-
           import android.app.Activity;
           import android.content.Context;
           import android.graphics.Canvas;
@@ -207,7 +216,6 @@ jobs:
           import android.util.Log;
           import android.view.MotionEvent;
           import android.view.View;
-
           public class MainActivity extends Activity {
               @Override public void onCreate(Bundle state) {
                   super.onCreate(state);
@@ -215,20 +223,17 @@ jobs:
                   Log.e("FakeRoblox", "FAKE_ROBLOX_URI=" + uri);
                   setContentView(new MotionView(this, uri));
               }
-
               static final class MotionView extends View {
                   private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   private final String uri;
                   private boolean bright;
                   private int touches;
-
                   MotionView(Context context, String uri) {
                       super(context);
                       this.uri = uri;
                       setFocusable(true);
                       setClickable(true);
                   }
-
                   @Override protected void onDraw(Canvas canvas) {
                       canvas.drawColor(bright ? Color.WHITE : Color.BLACK);
                       paint.setColor(bright ? Color.BLACK : Color.WHITE);
@@ -237,7 +242,6 @@ jobs:
                       canvas.drawText("touches=" + touches, 72, 225, paint);
                       canvas.drawText(uri, 72, 290, paint);
                   }
-
                   @Override public boolean onTouchEvent(MotionEvent event) {
                       if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                           touches++;
@@ -277,7 +281,6 @@ jobs:
             adb shell cmd appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
             adb shell cmd appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS | tee emulator-artifacts/restricted-appop.txt
             grep -qi 'allow' emulator-artifacts/restricted-appop.txt
-
             adb shell am force-stop com.revolution.android || true
             adb shell am force-stop com.roblox.client || true
             adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-first-start.txt
@@ -288,14 +291,11 @@ jobs:
             grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
             grep -Fxq '1' emulator-artifacts/accessibility-enabled.txt
             grep -Fq 'RevoAccessibilityService' emulator-artifacts/accessibility.txt
-
-            # Do not force-stop Revolution here: that can tear down the enabled service.
             adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-return.txt
             sleep 8
             adb logcat -c
             adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/elol-broadcast.txt
             sleep 16
-
             adb exec-out screencap -p > emulator-artifacts/elol-final.png
             adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
             adb logcat -d -v time > emulator-artifacts/logcat.txt
@@ -303,7 +303,6 @@ jobs:
             cat emulator-artifacts/elol-flow.txt
             echo '===== foreground ====='
             grep -E 'topResumedActivity|mResumedActivity' emulator-artifacts/activities.txt | head -n 10 || true
-
             grep 'RevoElolPrepared' emulator-artifacts/logcat.txt | grep -q '"patternName":"e_lol"'
             grep 'RevoElolStartButton' emulator-artifacts/logcat.txt | grep -q '"text":"Start"'
             grep '\[android-engine\] configured' emulator-artifacts/logcat.txt | grep -q '"patternName":"e_lol"'
@@ -314,13 +313,12 @@ jobs:
             grep 'FakeRoblox' emulator-artifacts/logcat.txt | grep -q 'FAKE_ROBLOX_TOUCH count='
             grep 'RevoMovementEvidence' emulator-artifacts/logcat.txt | grep -q 'confirmed=true'
             grep -Eq 'topResumedActivity.*com\.roblox\.client|mResumedActivity.*com\.roblox\.client' emulator-artifacts/activities.txt
-
             grep 'RevoElolState' emulator-artifacts/logcat.txt | tail -n1 > emulator-artifacts/state.txt
             cat emulator-artifacts/state.txt
             python3 - <<'PY'
             import json, re
             line = open('emulator-artifacts/state.txt').read()
-            m = re.search(r'RevoElolState:\s*(\{.*\})', line)
+            m = re.search(r'RevoElolState.*?(\{.*\})', line)
             assert m, line
             s = json.loads(m.group(1))
             assert s['running'] is True, s
