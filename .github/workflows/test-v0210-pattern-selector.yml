@@ -1,0 +1,149 @@
+name: Test Revo Android v0.2.10 Gather pattern selector
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0210-pattern-selector.yml'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
+      - 'patches/android-backend-v0.2.6.js'
+      - 'patches/android-backend-v0.2.8.js'
+      - 'patches/android-backend-v0.2.8.1.js'
+      - 'patches/android-backend-v0.2.8.2.js'
+      - 'patches/android-backend-v0.2.9.js'
+      - 'patches/android-backend-v0.2.10.js'
+      - 'tools/patch-revo-frontend-v028.py'
+      - 'tools/recover-vite-pngs.js'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -f revo-android/app/build.gradle.kts
+
+      - name: Restore exact desktop frontend and Android runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www \
+            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q 'availablePatterns' patches/android-backend-v0.2.10.js
+          grep -q "'e_lol'" patches/android-backend-v0.2.10.js
+          grep -q '__revoAndroidV0210PatternsInstalled' patches/android-backend-v0.2.10.js
+
+      - name: Add WebView selector probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+          s = s.replace(
+              'web.loadUrl("https://revo.local/index.android.html");',
+              '''web.loadUrl("https://revo.local/index.android.html");\n        Handler patternProbeHandler = new Handler(Looper.getMainLooper());\n        patternProbeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Disable');if(b)b.click();return 'dismissed';})()",\n                value -> Log.e("RevoDismiss", String.valueOf(value)));\n        }, 14000);\n        patternProbeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const rt=window.dataRuntime;if(!rt)return 'missing-runtime';const list=rt.Object('state').Object('config').List('availablePatterns');const names=(list.values||[]).filter(x=>typeof x==='string');const preset=rt.presetObject(rt.preset||rt.defaultPreset||'Default');const active=preset.Object('patterns').List('active');active.keyField='id';active.primitive=false;let row=active.Object('android-selector-probe');if(!row)row=active.Append('android-selector-probe');row.Set('order',0);row.Set('field','pinetree');const c=row.Object('config');c.Set('gatherPattern','Bamboo');c.Set('seconds',900);c.Set('backpackPercent',90);c.Set('walkReturn',true);c.Set('invertFB',false);c.Set('invertLR',false);c.Set('shiftLock',false);c.Set('zoom',0);c.Set('length',8);c.Set('width',2);c.Set('distance',0);c.Set('alignment',0);c.Set('repetitions',0);c.Set('driftComp',true);c.Set('position','center');c.Set('yaw',0);c.Set('pitch',0);const gather=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Gather');if(gather)gather.click();console.error('RevoPatternCatalog '+JSON.stringify({backend:window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion,count:names.length,names:names}));return 'prepared';}catch(e){console.error('RevoPatternCatalog ERROR '+String(e));return 'error';}})()",\n                value -> Log.e("RevoPatternPrepare", String.valueOf(value)));\n        }, 20500);\n        patternProbeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const all=[...document.querySelectorAll('button,[role=combobox],input')];const target=all.find(x=>((x.innerText||x.textContent||x.value||'').trim()==='Bamboo'));if(target){target.click();console.error('RevoPatternOpen '+JSON.stringify({tag:target.tagName,role:target.getAttribute('role'),text:(target.innerText||target.textContent||target.value||'').trim()}));return 'clicked';}console.error('RevoPatternOpen NOT_FOUND '+JSON.stringify(all.slice(0,80).map(x=>({tag:x.tagName,role:x.getAttribute('role'),text:(x.innerText||x.textContent||x.value||'').trim(),placeholder:x.getAttribute('placeholder')}))));return 'not-found';}catch(e){console.error('RevoPatternOpen ERROR '+String(e));return 'error';}})()",\n                value -> Log.e("RevoPatternOpenSchedule", String.valueOf(value)));\n        }, 23500);\n        patternProbeHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const text=document.body.innerText||'';const rt=window.dataRuntime;const names=(rt.Object('state').Object('config').List('availablePatterns').values||[]).filter(x=>typeof x==='string');const out={backend:window.RevoAndroidDebug&&window.RevoAndroidDebug.backendVersion,count:names.length,hasELol:names.includes('e_lol'),hasCorner:names.includes('CornerXSnake'),uiELol:text.includes('e_lol'),uiCorner:text.includes('CornerXSnake'),uiBambooAlt:text.includes('BambooAlt')};console.error('RevoPatternUiProbe '+JSON.stringify(out));return JSON.stringify(out);}catch(e){console.error('RevoPatternUiProbe ERROR '+String(e));return 'error';}})()",\n                value -> Log.e("RevoPatternUiResult", String.valueOf(value)));\n        }, 25000);''')
+          p.write_text(s)
+          PY
+
+      - name: Build diagnostic APK
+        shell: bash
+        run: gradle -p revo-android --stacktrace clean :app:assembleDebug
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot Android 15 emulator and verify real Gather selector
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            mkdir -p emulator-artifacts
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            sleep 30
+            adb exec-out screencap -p > emulator-artifacts/revo-v0210-pattern-selector.png
+            adb logcat -d -v time > emulator-artifacts/logcat-v0210.txt
+            grep -E 'RevoPattern|android-patterns|android-backend|preload' emulator-artifacts/logcat-v0210.txt > emulator-artifacts/revo-v0210-pattern-log.txt || true
+            cat emulator-artifacts/revo-v0210-pattern-log.txt
+            grep -q '\[android-backend\] v0.2.10 Gather pattern catalog repair installed' emulator-artifacts/logcat-v0210.txt
+            grep 'RevoPatternCatalog' emulator-artifacts/logcat-v0210.txt | grep -q '\\"backend\\":\\"0.2.10\\"'
+            grep 'RevoPatternCatalog' emulator-artifacts/logcat-v0210.txt | grep -q '\\"e_lol\\"'
+            grep 'RevoPatternCatalog' emulator-artifacts/logcat-v0210.txt | grep -q '\\"CornerXSnake\\"'
+            grep 'RevoPatternUiProbe' emulator-artifacts/logcat-v0210.txt | grep -q '\\"hasELol\\":true'
+            grep 'RevoPatternUiProbe' emulator-artifacts/logcat-v0210.txt | grep -q '\\"hasCorner\\":true'
+            grep 'RevoPatternUiProbe' emulator-artifacts/logcat-v0210.txt | grep -q '\\"uiELol\\":true'
+            grep 'RevoPatternUiProbe' emulator-artifacts/logcat-v0210.txt | grep -q '\\"uiCorner\\":true'
+            echo 'PASS: Android 15 real Gather selector is populated with desktop Revolution patterns'
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-android-v0.2.10-pattern-selector-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
