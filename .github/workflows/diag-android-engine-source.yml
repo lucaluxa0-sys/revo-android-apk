@@ -34,3 +34,17 @@ jobs:
             cat "$f"
             echo "===== END $f ====="
           done
+      - name: Print manifest and accessibility metadata
+        shell: bash
+        run: |
+          echo '===== BEGIN AndroidManifest.xml ====='
+          cat revo-android/app/src/main/AndroidManifest.xml
+          echo '===== END AndroidManifest.xml ====='
+          echo '===== ACCESSIBILITY RESOURCE FILES ====='
+          find revo-android/app/src/main/res -type f -print | sort | while read -r f; do
+            if grep -qi 'accessibility\|canPerformGestures\|canTakeScreenshot' "$f"; then
+              echo "===== BEGIN $f ====="
+              cat "$f"
+              echo "===== END $f ====="
+            fi
+          done
