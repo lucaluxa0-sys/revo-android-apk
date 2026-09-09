@@ -80,47 +80,17 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
-
-            # Stop any prior app process BEFORE enabling Accessibility. Force-stopping
-            # after enable puts the package back into stopped state and tears down
-            # the accessibility-service binding we are trying to test.
             adb shell am force-stop com.revolution.android || true
-
-            # Android 13+ blocks sideloaded accessibility services until the user
-            # explicitly allows Restricted Settings. CI grants that exact AppOp;
-            # the shipping app must guide a real user through the system UI instead.
             adb shell appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
             adb shell appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS
             adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
             adb shell settings put secure accessibility_enabled 1
-
             adb logcat -c
             adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
-
-            # Starting the activity clears Android's package-stopped state. Poll the
-            # authoritative accessibility dump so the engine gate cannot confuse a
-            # missing service with an engine/routine failure.
-            bound=0
-            i=0
-            while [ "$i" -lt 30 ]; do
-              adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt
-              if grep -Fq 'com.revolution.android/.RevoAccessibilityService' emulator-artifacts/accessibility.txt; then
-                bound=1
-                break
-              fi
-              i=$((i+1))
-              sleep 1
-            done
+            sh -c 'i=0; while [ "$i" -lt 30 ]; do adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt; if grep -Fq "com.revolution.android/.RevoAccessibilityService" emulator-artifacts/accessibility.txt; then exit 0; fi; i=$((i+1)); sleep 1; done; cat emulator-artifacts/accessibility.txt; exit 1'
             cat emulator-artifacts/accessibility.txt
-            if [ "$bound" -ne 1 ]; then
-              echo 'ERROR: Revolution accessibility service never appeared in dumpsys'
-              adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt
-              exit 1
-            fi
-
             sleep 8
             adb exec-out screencap -p > emulator-artifacts/revo-v029-engine.png
             adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt
@@ -129,24 +99,7 @@ jobs:
             grep 'RevoGatherAdapter.*action pattern=e_lol' emulator-artifacts/logcat-v029-engine.txt | head -n 5
             grep 'RevoEngineProbe.*state {' emulator-artifacts/logcat-v029-engine.txt | tail -n1 > emulator-artifacts/state.txt
             cat emulator-artifacts/state.txt
-            python - <<'PY'
-            import json,re
-            line=open('emulator-artifacts/state.txt').read()
-            m=re.search(r'state (\{.*\})', line)
-            assert m, line
-            s=json.loads(m.group(1))
-            assert s['running'] is True, s
-            assert s['frameCount'] > 0, s
-            assert s['frameWidth'] > 0 and s['frameHeight'] > 0, s
-            assert s['routine'] == 'gather', s
-            assert s['patternName'] == 'e_lol', s
-            assert s['patternStepCount'] == 18, s
-            assert s['actionCount'] >= 2, s
-            assert s['lastGestureAccepted'] is True, s
-            assert s['movementCalibration'] == 'provisional-android', s
-            assert s['requireRobloxForeground'] is False, s
-            print('PASS engine state:', json.dumps(s, sort_keys=True))
-            PY
+            python -c "import json,re; line=open('emulator-artifacts/state.txt').read(); m=re.search(r'state (\\{.*\\})',line); assert m,line; s=json.loads(m.group(1)); assert s['running'] is True,s; assert s['frameCount']>0,s; assert s['frameWidth']>0 and s['frameHeight']>0,s; assert s['routine']=='gather',s; assert s['patternName']=='e_lol',s; assert s['patternStepCount']==18,s; assert s['actionCount']>=2,s; assert s['lastGestureAccepted'] is True,s; assert s['movementCalibration']=='provisional-android',s; assert s['requireRobloxForeground'] is False,s; print('PASS engine state:',json.dumps(s,sort_keys=True))"
       - name: Upload engine evidence
         if: always()
         uses: actions/upload-artifact@v4
