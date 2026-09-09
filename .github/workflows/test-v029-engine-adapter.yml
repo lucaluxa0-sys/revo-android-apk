@@ -1,0 +1,123 @@
+name: Test v0.2.9 gather engine adapter
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+      - 'patches/android-backend-v0.2.9.js'
+      - '.github/workflows/test-v029-engine-adapter.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+      - name: Restore and verify v0.2.9 source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          grep -q 'gather.onFrame(frame);' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+          grep -q 'class RevoGatherAdapter' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'configureMacro(String json)' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          grep -q 'isRobloxForeground()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          node --check patches/android-backend-v0.2.9.js
+      - name: Instrument controlled engine probe
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s=p.read_text()
+          s=s.replace('import android.webkit.WebView;', 'import android.webkit.WebView;\nimport android.util.Log;')
+          marker='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }'''
+          repl='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }\n        if (getIntent() != null && getIntent().getBooleanExtra("engineProbe", false)) {\n            engineProbeWhenReady(0);\n        }'''
+          if marker not in s: raise SystemExit('onCreate marker missing')
+          s=s.replace(marker,repl,1)
+          insert='''\n    private void engineProbeWhenReady(int attempt) {\n        if (isFinishing()) return;\n        if (RevoAccessibilityService.get() != null) {\n            String cfg = "{\\\"routine\\\":\\\"gather\\\",\\\"account\\\":\\\"Probe\\\",\\\"patternName\\\":\\\"e_lol\\\",\\\"width\\\":2,\\\"length\\\":8,\\\"msPerStud\\\":1,\\\"keyDelayMs\\\":1,\\\"requireRobloxForeground\\\":false}";\n            Log.e("RevoEngineProbe", "configured " + bridge.configureMacro(cfg));\n            bridge.startMacro("Probe");\n            new Handler(Looper.getMainLooper()).postDelayed(() ->\n                Log.e("RevoEngineProbe", "state " + bridge.getEngineState()), 3000);\n            return;\n        }\n        if (attempt >= 40) {\n            Log.e("RevoEngineProbe", "ERROR accessibility never connected");\n            return;\n        }\n        new Handler(Looper.getMainLooper()).postDelayed(() -> engineProbeWhenReady(attempt + 1), 250);\n    }\n'''
+          stop_marker='''    // Deliberately DO NOT stop MacroEngine here.'''
+          if stop_marker not in s: raise SystemExit('class insertion marker missing')
+          s=s.replace(stop_marker, insert+'\n'+stop_marker,1)
+          p.write_text(s)
+      - name: Build probe APK
+        shell: bash
+        run: gradle -p revo-android --stacktrace :app:assembleDebug
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+      - name: Boot Android 15 and execute recovered e_lol adapter
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            mkdir -p emulator-artifacts
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
+            adb shell settings put secure accessibility_enabled 1
+            sleep 2
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
+            sleep 8
+            adb exec-out screencap -p > emulator-artifacts/revo-v029-engine.png
+            adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt
+            grep 'RevoGatherAdapter.*configured pattern=e_lol steps=18' emulator-artifacts/logcat-v029-engine.txt
+            grep 'RevoGatherAdapter.*action pattern=e_lol' emulator-artifacts/logcat-v029-engine.txt | head -n 5
+            grep 'RevoEngineProbe.*state {' emulator-artifacts/logcat-v029-engine.txt | tail -n1 > emulator-artifacts/state.txt
+            cat emulator-artifacts/state.txt
+            python - <<'PY'
+            import json,re
+            line=open('emulator-artifacts/state.txt').read()
+            m=re.search(r'state (\{.*\})', line)
+            assert m, line
+            s=json.loads(m.group(1))
+            assert s['running'] is True, s
+            assert s['frameCount'] > 0, s
+            assert s['frameWidth'] > 0 and s['frameHeight'] > 0, s
+            assert s['routine'] == 'gather', s
+            assert s['patternName'] == 'e_lol', s
+            assert s['patternStepCount'] == 18, s
+            assert s['actionCount'] >= 2, s
+            assert s['lastGestureAccepted'] is True, s
+            assert s['movementCalibration'] == 'provisional-android', s
+            assert s['requireRobloxForeground'] is False, s
+            print('PASS engine state:', json.dumps(s, sort_keys=True))
+            PY
+      - name: Upload engine evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v029-android15-engine-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
