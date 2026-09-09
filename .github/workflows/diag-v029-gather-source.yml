@@ -1,0 +1,36 @@
+name: Diagnose v0.2.9 gather engine source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v029-gather-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore packed Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+      - name: Print exact v0.2.9 gather engine sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '===== RevoGatherAdapter.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          echo '===== MacroEngine.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+          echo '===== AndroidRevoBridge.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          echo '===== RevoAccessibilityService.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
