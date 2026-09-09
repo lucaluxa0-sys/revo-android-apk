@@ -1,0 +1,347 @@
+name: Test Revo Android v0.2.11 e_lol end to end
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0211-elol-e2e.yml'
+      - 'tools/patch-native-v0211-bee-swarm-launch.py'
+      - 'patches/android-backend-v0.2.9.js'
+      - 'patches/android-backend-v0.2.10.js'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+      - '.ci/enable_revo_accessibility.py'
+
+permissions:
+  contents: read
+
+jobs:
+  elol-real-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore production source and apply v0.2.11 launch fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'roblox-foreground-frame-delta-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          python3 -m py_compile .ci/enable_revo_accessibility.py
+
+      - name: Restore exact desktop frontend and Android overlays
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www \
+            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Instrument real frontend Start with an e_lol Gather row
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          s = s.replace(
+              'import android.webkit.WebChromeClient;',
+              'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;'
+          )
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });'''
+          )
+
+          marker = '''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }'''
+          repl = marker + '''\n        android.content.IntentFilter elolGateFilter = new android.content.IntentFilter("com.revolution.android.START_ELOL_GATE");\n        registerReceiver(new android.content.BroadcastReceiver() {\n            @Override public void onReceive(android.content.Context context, android.content.Intent intent) {\n                Log.e("RevoElolGate", "broadcast received");\n                startElolGateWhenReady(0);\n            }\n        }, elolGateFilter, android.content.Context.RECEIVER_EXPORTED);\n        Log.e("RevoElolGate", "receiver registered");'''
+          if marker not in s:
+              raise SystemExit('onCreate autostart marker missing')
+          s = s.replace(marker, repl, 1)
+
+          method = r'''
+    private void startElolGateWhenReady(int attempt) {
+        if (isFinishing() || web == null) return;
+        String script = "(()=>{try{" +
+                "const rt=window.dataRuntime;" +
+                "if(!rt||typeof rt.presetObject!=='function'||!window.go||!window.go.cmd||!window.go.cmd.Macro||!window.AndroidRevo)return 'retry';" +
+                "const preset=rt.presetObject(rt.preset||rt.defaultPreset||'Default');if(!preset)return 'retry';" +
+                "const active=preset.Object('patterns').List('active');active.keyField='id';active.primitive=false;" +
+                "let row=active.Object('android-elol-e2e');if(!row)row=active.Append('android-elol-e2e');" +
+                "row.Set('order',-100);row.Set('field','pinetree');const c=row.Object('config');" +
+                "c.Set('gatherPattern','e_lol');c.Set('seconds',900);c.Set('backpackPercent',90);c.Set('walkReturn',true);" +
+                "c.Set('invertFB',false);c.Set('invertLR',false);c.Set('shiftLock',false);c.Set('zoom',0);" +
+                "c.Set('length',8);c.Set('width',2);c.Set('distance',0);c.Set('alignment',0);c.Set('repetitions',0);" +
+                "c.Set('driftComp',true);c.Set('position','center');c.Set('yaw',0);c.Set('pitch',0);" +
+                "localStorage.setItem('revo.android.msPerStud','12');localStorage.setItem('revo.android.joystickCenterX','0.16');" +
+                "localStorage.setItem('revo.android.joystickCenterY','0.78');localStorage.setItem('revo.android.joystickRadius','0.085');" +
+                "const cfg=window.RevoAndroidDebug&&window.RevoAndroidDebug.engineConfig?window.RevoAndroidDebug.engineConfig('Default'):null;" +
+                "console.error('RevoElolPrepared '+JSON.stringify(cfg));" +
+                "const buttons=[...document.querySelectorAll('button')];const start=buttons.find(x=>(x.innerText||x.textContent||'').trim()==='Start'&&!x.disabled);" +
+                "if(!start){console.error('RevoElolStartButton NOT_FOUND');return 'retry';}" +
+                "console.error('RevoElolStartButton '+JSON.stringify({text:(start.innerText||start.textContent||'').trim(),disabled:!!start.disabled,cls:String(start.className||'')}));" +
+                "start.click();return 'clicked';" +
+                "}catch(e){console.error('RevoElolGate ERROR '+String(e));return 'error';}})()";
+        web.evaluateJavascript(script, value -> {
+            Log.e("RevoElolGateResult", String.valueOf(value));
+            if (String.valueOf(value).contains("retry") && attempt < 80) {
+                new Handler(Looper.getMainLooper()).postDelayed(() -> startElolGateWhenReady(attempt + 1), 250);
+                return;
+            }
+            if (String.valueOf(value).contains("clicked")) {
+                new Handler(Looper.getMainLooper()).postDelayed(() ->
+                        Log.e("RevoElolState", bridge.getEngineState()), 12000);
+            }
+        });
+    }
+'''
+          stop_marker = '''    // Deliberately DO NOT stop MacroEngine here.'''
+          if stop_marker not in s:
+              raise SystemExit('class insertion marker missing')
+          s = s.replace(stop_marker, method + '\n' + stop_marker, 1)
+          p.write_text(s)
+
+      - name: Build Revolution diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build motion-reactive CI Roblox receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fake-roblox/app/src/main/java/com/roblox/client fake-roblox/app/src/main/res/values
+          cat > fake-roblox/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "FakeRobloxMotion"
+          include(":app")
+          EOF
+          cat > fake-roblox/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "8.12.2" apply false }
+          EOF
+          cat > fake-roblox/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+              namespace = "com.roblox.client"
+              compileSdk = 36
+              defaultConfig {
+                  applicationId = "com.roblox.client"
+                  minSdk = 30
+                  targetSdk = 36
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+          EOF
+          cat > fake-roblox/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar" /></resources>
+          EOF
+          cat > fake-roblox/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:theme="@style/AppTheme" android:label="Fake Roblox Motion CI">
+              <activity android:name=".MainActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <category android:name="android.intent.category.BROWSABLE" />
+                  <data android:scheme="roblox" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+          cat > fake-roblox/app/src/main/java/com/roblox/client/MainActivity.java <<'EOF'
+          package com.roblox.client;
+
+          import android.app.Activity;
+          import android.content.Context;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.view.MotionEvent;
+          import android.view.View;
+
+          public class MainActivity extends Activity {
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  String uri = getIntent() == null || getIntent().getData() == null ? "" : getIntent().getData().toString();
+                  Log.e("FakeRoblox", "FAKE_ROBLOX_URI=" + uri);
+                  setContentView(new MotionView(this, uri));
+              }
+
+              static final class MotionView extends View {
+                  private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private final String uri;
+                  private boolean bright;
+                  private int touches;
+
+                  MotionView(Context context, String uri) {
+                      super(context);
+                      this.uri = uri;
+                      setFocusable(true);
+                      setClickable(true);
+                  }
+
+                  @Override protected void onDraw(Canvas canvas) {
+                      canvas.drawColor(bright ? Color.WHITE : Color.BLACK);
+                      paint.setColor(bright ? Color.BLACK : Color.WHITE);
+                      paint.setTextSize(46f);
+                      canvas.drawText("Fake Roblox Bee Swarm CI", 72, 160, paint);
+                      canvas.drawText("touches=" + touches, 72, 225, paint);
+                      canvas.drawText(uri, 72, 290, paint);
+                  }
+
+                  @Override public boolean onTouchEvent(MotionEvent event) {
+                      if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                          touches++;
+                          bright = !bright;
+                          Log.e("FakeRoblox", "FAKE_ROBLOX_TOUCH count=" + touches + " x=" + event.getX() + " y=" + event.getY());
+                          invalidate();
+                      }
+                      return true;
+                  }
+              }
+          }
+          EOF
+          gradle -p fake-roblox --stacktrace :app:assembleDebug
+          test -s fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Android 15 real Start plus e_lol movement gate
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -eu
+            mkdir -p emulator-artifacts
+            adb install -r fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell cmd appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
+            adb shell cmd appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS | tee emulator-artifacts/restricted-appop.txt
+            grep -qi 'allow' emulator-artifacts/restricted-appop.txt
+
+            adb shell am force-stop com.revolution.android || true
+            adb shell am force-stop com.roblox.client || true
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-first-start.txt
+            python3 .ci/enable_revo_accessibility.py
+            adb shell settings get secure enabled_accessibility_services | tee emulator-artifacts/enabled-setting.txt
+            adb shell settings get secure accessibility_enabled | tee emulator-artifacts/accessibility-enabled.txt
+            adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt
+            grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
+            grep -Fxq '1' emulator-artifacts/accessibility-enabled.txt
+            grep -Fq 'RevoAccessibilityService' emulator-artifacts/accessibility.txt
+
+            # Do not force-stop Revolution here: that can tear down the enabled service.
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-return.txt
+            sleep 8
+            adb logcat -c
+            adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/elol-broadcast.txt
+            sleep 16
+
+            adb exec-out screencap -p > emulator-artifacts/elol-final.png
+            adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
+            adb logcat -d -v time > emulator-artifacts/logcat.txt
+            grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoGatherAdapter|RevoMovementEvidence|FakeRoblox|android-engine' emulator-artifacts/logcat.txt > emulator-artifacts/elol-flow.txt || true
+            cat emulator-artifacts/elol-flow.txt
+            echo '===== foreground ====='
+            grep -E 'topResumedActivity|mResumedActivity' emulator-artifacts/activities.txt | head -n 10 || true
+
+            grep 'RevoElolPrepared' emulator-artifacts/logcat.txt | grep -q '"patternName":"e_lol"'
+            grep 'RevoElolStartButton' emulator-artifacts/logcat.txt | grep -q '"text":"Start"'
+            grep '\[android-engine\] configured' emulator-artifacts/logcat.txt | grep -q '"patternName":"e_lol"'
+            grep 'RevoAndroid' emulator-artifacts/logcat.txt | grep -q 'Launching Bee Swarm via roblox://placeId=1537690962 package=com.roblox.client'
+            grep 'FakeRoblox' emulator-artifacts/logcat.txt | grep -q 'FAKE_ROBLOX_URI=roblox://placeId=1537690962'
+            grep 'RevoGatherAdapter' emulator-artifacts/logcat.txt | grep -q 'configured pattern=e_lol steps=18'
+            grep 'RevoGatherAdapter' emulator-artifacts/logcat.txt | grep -q 'action pattern=e_lol'
+            grep 'FakeRoblox' emulator-artifacts/logcat.txt | grep -q 'FAKE_ROBLOX_TOUCH count='
+            grep 'RevoMovementEvidence' emulator-artifacts/logcat.txt | grep -q 'confirmed=true'
+            grep -Eq 'topResumedActivity.*com\.roblox\.client|mResumedActivity.*com\.roblox\.client' emulator-artifacts/activities.txt
+
+            grep 'RevoElolState' emulator-artifacts/logcat.txt | tail -n1 > emulator-artifacts/state.txt
+            cat emulator-artifacts/state.txt
+            python3 - <<'PY'
+            import json, re
+            line = open('emulator-artifacts/state.txt').read()
+            m = re.search(r'RevoElolState:\s*(\{.*\})', line)
+            assert m, line
+            s = json.loads(m.group(1))
+            assert s['running'] is True, s
+            assert s['routine'] == 'gather', s
+            assert s['patternName'] == 'e_lol', s
+            assert s['patternStepCount'] == 18, s
+            assert s['actionCount'] >= 2, s
+            assert s['lastGestureAccepted'] is True, s
+            assert s['requireRobloxForeground'] is True, s
+            assert s['activePackage'] == 'com.roblox.client', s
+            assert s['movementEvidenceMode'] == 'roblox-foreground-frame-delta-v1', s
+            assert s['visualMovementSamples'] >= 1, s
+            assert s['visualMovementConfirmedSamples'] >= 1, s
+            print('PASS engine state:', json.dumps(s, sort_keys=True))
+            PY
+            echo 'PASS: real Start -> Bee Swarm URI -> e_lol 18-step adapter -> Accessibility movement -> visual response on Android 15'
+
+      - name: Upload e_lol end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0211-elol-e2e-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
