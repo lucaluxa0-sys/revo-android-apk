@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: migrate-v029-roblox-motion-evidence
@@ -39,21 +40,25 @@ jobs:
           unzip -q /tmp/source.zip
           test -f revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
 
-      - name: Add Roblox foreground visual movement evidence
+      - name: Add and harden Roblox foreground visual movement evidence
         id: patch
         shell: bash
         run: |
           set -euo pipefail
           target='revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java'
-          if grep -q 'roblox-foreground-frame-delta-v1' "$target"; then
-            echo 'Movement evidence already present; no source rewrite needed.'
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            exit 0
+          changed=false
+          if ! grep -q 'roblox-foreground-frame-delta-v1' "$target"; then
+            patch -p1 < patches/revo-gather-roblox-motion-evidence.patch
+            changed=true
           fi
-          patch -p1 < patches/revo-gather-roblox-motion-evidence.patch
+          if ! grep -q 'long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)' "$target"; then
+            patch -p1 < patches/revo-gather-motion-sample-order.patch
+            changed=true
+          fi
           grep -q 'roblox-foreground-frame-delta-v1' "$target"
           grep -q 'RevoMovementEvidence' "$target"
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          grep -q 'long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)' "$target"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
       - name: Repack verified split source
         if: steps.patch.outputs.changed == 'true'
@@ -68,6 +73,7 @@ jobs:
           unzip -tq /tmp/source-verify.zip
           unzip -p /tmp/source-verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -q 'roblox-foreground-frame-delta-v1'
           unzip -p /tmp/source-verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -q 'RevoMovementEvidence'
+          unzip -p /tmp/source-verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -q 'long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)'
 
       - name: Commit only if live main is unchanged
         if: steps.patch.outputs.changed == 'true'
@@ -85,5 +91,14 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03
           git diff --cached --check
-          git commit -m 'Verify Roblox visual movement after gather gestures'
+          git commit -m 'Preserve Roblox movement evidence sample ordering'
           git push origin HEAD:main
+
+      - name: Dispatch Android 15 engine gate for migrated source
+        if: steps.patch.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run test-v029-engine-adapter.yml --ref main
