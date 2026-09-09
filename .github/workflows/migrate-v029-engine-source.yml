@@ -1,0 +1,91 @@
+name: Migrate v0.2.9 gather engine source
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/migrate-v029-engine-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconstruct current Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip -d /tmp/src
+          test -f /tmp/src/revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+      - name: Apply desktop-grounded gather adapter
+        shell: python
+        run: |
+          from pathlib import Path
+          import base64, gzip
+
+          root = Path('/tmp/src/revo-android/app/src/main/java/com/revolution/android')
+          adapter_b64 = '''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'''
+          (root / 'RevoGatherAdapter.java').write_bytes(gzip.decompress(base64.b64decode(adapter_b64)))
+
+          def replace_once(path, old, new, label):
+              s = path.read_text()
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 occurrence, got {count}')
+              path.write_text(s.replace(old, new, 1))
+
+          engine = root / 'MacroEngine.java'
+          replace_once(engine, '    private final AtomicLong frameCount = new AtomicLong(0);\n', '    private final AtomicLong frameCount = new AtomicLong(0);\n    private final RevoGatherAdapter gather;\n', 'engine field')
+          replace_once(engine, '    public MacroEngine(int displayId) { this.displayId = displayId; }\n', '    public MacroEngine(int displayId) {\n        this.displayId = displayId;\n        this.gather = new RevoGatherAdapter(displayId);\n    }\n', 'engine constructor')
+          replace_once(engine, '    public Bitmap latestFrame() { return latestFrame.get(); }\n', '    public Bitmap latestFrame() { return latestFrame.get(); }\n\n    public synchronized String configure(String json) {\n        gather.configure(json);\n        return stateJson();\n    }\n', 'engine configure')
+          replace_once(engine, '        frameCount.set(0);\n        status = "Starting";\n', '        frameCount.set(0);\n        gather.onStart();\n        status = "Starting";\n', 'engine start')
+          replace_once(engine, '        status = next ? "Paused" : "Running";\n', '        status = next ? "Paused" : "Running";\n        gather.onPause(next);\n', 'engine pause')
+          replace_once(engine, '        status = "Stopped";\n        Thread t = worker;\n', '        status = "Stopped";\n        gather.onStop();\n        Thread t = worker;\n', 'engine stop')
+          replace_once(engine, '    private void onFrame(Bitmap frame) {\n        // v0.2: frame acquisition is live. Revo detector/routine adapters plug in here.\n    }\n', '    private void onFrame(Bitmap frame) {\n        gather.onFrame(frame);\n    }\n', 'engine onFrame')
+          replace_once(engine, '            Bitmap b = latestFrame.get();\n', '            gather.appendState(o);\n            Bitmap b = latestFrame.get();\n', 'engine state')
+
+          bridge = root / 'AndroidRevoBridge.java'
+          replace_once(bridge, '    @JavascriptInterface public String getEngineState() { return engine().stateJson(); }\n', '    @JavascriptInterface public String getEngineState() { return engine().stateJson(); }\n    @JavascriptInterface public String configureMacro(String json) { return engine().configure(json); }\n', 'bridge configure')
+
+          a11y = root / 'RevoAccessibilityService.java'
+          replace_once(a11y, 'import android.view.accessibility.AccessibilityEvent;\n', 'import android.view.accessibility.AccessibilityEvent;\nimport android.view.accessibility.AccessibilityNodeInfo;\n', 'a11y import')
+          replace_once(a11y, '    private static volatile RevoAccessibilityService instance;\n', '    private static volatile RevoAccessibilityService instance;\n    private volatile String activePackageName = "";\n', 'a11y state')
+          replace_once(a11y, '    @Override public void onAccessibilityEvent(AccessibilityEvent event) { }\n    @Override public void onInterrupt() { }\n', '''    @Override public void onAccessibilityEvent(AccessibilityEvent event) {\n        if (event != null && event.getPackageName() != null) activePackageName = String.valueOf(event.getPackageName());\n    }\n    @Override public void onInterrupt() { }\n\n    public String activePackageName() {\n        try {\n            AccessibilityNodeInfo root = getRootInActiveWindow();\n            if (root != null && root.getPackageName() != null) {\n                String pkg = String.valueOf(root.getPackageName());\n                if (!pkg.isEmpty()) activePackageName = pkg;\n            }\n        } catch (Throwable ignored) {}\n        return activePackageName == null ? "" : activePackageName;\n    }\n\n    public boolean isRobloxForeground() {\n        String pkg = activePackageName();\n        return "com.roblox.client".equals(pkg) || "com.roblox.client.samsunggalaxy".equals(pkg);\n    }\n''', 'a11y foreground guard')
+
+          assert 'gather.onFrame(frame);' in engine.read_text()
+          assert 'configureMacro(String json)' in bridge.read_text()
+          assert 'isRobloxForeground()' in a11y.read_text()
+          print('v0.2.9 source migration applied')
+      - name: Repack source into authoritative CI parts
+        shell: bash
+        run: |
+          cd /tmp/src
+          zip -qr /tmp/source-v029.zip revo-android
+          base64 -w 76 /tmp/source-v029.zip > /tmp/source-v029.b64
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('/tmp/source-v029.b64').read_text().splitlines(True)
+          chunk = (len(lines) + 3) // 4
+          for i in range(4):
+              Path(f'.ci-source-part{i:02d}').write_text(''.join(lines[i*chunk:(i+1)*chunk]))
+          PY
+          cd "$GITHUB_WORKSPACE"
+          for i in 00 01 02 03; do cp "/tmp/src/.ci-source-part$i" ".ci/source.part$i"; done
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/verify.zip
+          unzip -p /tmp/verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -F 'Exact command geometry from desktop patterns/gather/e_lol.lua.'
+          unzip -p /tmp/verify.zip revo-android/app/src/main/java/com/revolution/android/MacroEngine.java | grep -F 'gather.onFrame(frame);'
+      - name: Commit packed v0.2.9 source
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03
+          git diff --cached --stat
+          git commit -m 'Port recovered e_lol gather adapter to Android engine'
+          git push origin HEAD:main
