@@ -271,6 +271,17 @@ def main():
         parents = parent_map(root)
         dump_visible_labels(root)
 
+        # Android 15 emulator can surface a Pixel Launcher ANR over Settings.
+        # Run-10 evidence showed this exact dialog blocked every retry even though
+        # the Revolution accessibility row was already visible underneath it.
+        launcher_anr = find_by_text(root, ["pixel launcher isn't responding"], exact=True)
+        if launcher_anr is not None:
+            close_app = find_by_text(root, ["close app"], exact=True)
+            if close_app is None:
+                raise RuntimeError("Pixel Launcher ANR is blocking Accessibility Settings without a Close app action")
+            click(close_app, parents, "dismiss Pixel Launcher ANR")
+            continue
+
         # Confirmation dialogs after enabling the service.
         for text in ("allow", "ok", "continue"):
             node = find_by_text(root, [text], exact=True)
