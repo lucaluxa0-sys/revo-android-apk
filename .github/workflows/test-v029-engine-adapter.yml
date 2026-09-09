@@ -103,6 +103,7 @@ jobs:
             adb shell dumpsys package com.revolution.android > emulator-artifacts/package.txt
             adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt
             grep -Fq 'RevoAccessibilityService' emulator-artifacts/accessibility.txt
+            adb shell am force-stop com.revolution.android || true
             adb logcat -c
             adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
             sleep 8
