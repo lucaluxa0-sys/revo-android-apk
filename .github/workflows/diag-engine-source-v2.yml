@@ -1,0 +1,41 @@
+name: Diagnose Android engine source v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-engine-source-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore packed Android source
+        shell: bash
+        run: |
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -f revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+      - name: Print exact engine sources
+        shell: bash
+        run: |
+          echo '===== MacroEngine.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+          echo '===== MacroEngineRegistry.java ====='
+          cat revo-android/app/src/main/java/com/revolution/android/MacroEngineRegistry.java
+          echo '===== AndroidRevoBridge.java engine refs ====='
+          grep -n -C 6 -E 'MacroEngine|startMacro|stopMacro|onFrame|capture|status|Roblox' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java || true
+          echo '===== MainActivity.java engine/capture refs ====='
+          grep -n -C 8 -E 'MacroEngine|onFrame|ImageReader|MediaProjection|VirtualDisplay|capture|frame' revo-android/app/src/main/java/com/revolution/android/MainActivity.java || true
+          echo '===== RevoAccessibilityService.java input refs ====='
+          grep -n -C 8 -E 'dispatchGesture|GestureDescription|Path|tap|swipe|key|display' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java || true
+          echo '===== manifest/service ====='
+          grep -n -C 4 -E 'accessibility|service|projection|foregroundService' revo-android/app/src/main/AndroidManifest.xml || true
+          echo '===== build deps ====='
+          cat revo-android/app/build.gradle.kts
