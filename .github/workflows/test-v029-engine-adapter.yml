@@ -83,8 +83,12 @@ jobs:
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am force-stop com.revolution.android || true
-            adb shell appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
-            adb shell appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS
+            adb shell pm list packages -i -U com.revolution.android > emulator-artifacts/install-source.txt
+            cat emulator-artifacts/install-source.txt
+            adb shell cmd appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
+            adb shell cmd appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS > emulator-artifacts/restricted-appop.txt
+            cat emulator-artifacts/restricted-appop.txt
+            grep -qi 'allow' emulator-artifacts/restricted-appop.txt
             adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
             adb shell settings put secure accessibility_enabled 1
             adb logcat -c
