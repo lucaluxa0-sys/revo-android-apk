@@ -52,7 +52,7 @@ jobs:
             changed=true
           fi
           if ! grep -q 'long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)' "$target"; then
-            patch -p1 < patches/revo-gather-motion-sample-order.patch
+            python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); s=p.read_text(); old="        patternStep++;\n        nextActionAtMs = now + durationMs + c.keyDelayMs;\n"; new="        patternStep++;\n        // When proving real Roblox response, do not overwrite the pre-gesture baseline\n        // with a later step before its post-gesture frame can be sampled.\n        long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)\n                ? Math.max(100, c.keyDelayMs) : c.keyDelayMs;\n        nextActionAtMs = now + durationMs + postDelayMs;\n"; assert old in s, "sample-order marker missing"; p.write_text(s.replace(old,new,1))' "$target"
             changed=true
           fi
           grep -q 'roblox-foreground-frame-delta-v1' "$target"
