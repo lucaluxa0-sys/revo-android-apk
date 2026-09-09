@@ -1,0 +1,91 @@
+name: Diagnose v0.2.11 navigation and desktop controls
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v0211-navigation-controls.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -d revo-android/app/src/main/java/com/revolution/android
+
+      - name: Print navigation-relevant native source excerpts
+        shell: python
+        run: |
+          from pathlib import Path
+          files = [
+              'MacroEngine.java',
+              'RevoGatherAdapter.java',
+              'GatherRuntimeConfig.java',
+              'AndroidRevoBridge.java',
+              'RevoAccessibilityService.java',
+          ]
+          needles = (
+              'hive','field','gather','navigate','navigation','spawn','claim','walk','return',
+              'routine','e_lol','pattern','joystick','gesture','activepackage','roblox','start(',
+              'onframe','capture','move','movement','pinetree','convert'
+          )
+          root = Path('revo-android/app/src/main/java/com/revolution/android')
+          for name in files:
+              p = root / name
+              print(f'===== {name} =====')
+              if not p.exists():
+                  print('MISSING')
+                  continue
+              lines = p.read_text(errors='replace').splitlines()
+              hits = set()
+              for i, line in enumerate(lines):
+                  low = line.lower()
+                  if any(n in low for n in needles):
+                      hits.update(range(max(0, i-5), min(len(lines), i+6)))
+              last = -2
+              for i in sorted(hits):
+                  if i > last + 1:
+                      print('---')
+                  print(f'{i+1:04d}: {lines[i]}')
+                  last = i
+
+      - name: Restore pinned desktop frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache /tmp/revo-www
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/revo-www
+
+      - name: Print Start Pause Stop and dot-control frontend contexts
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          js_files = list(Path('/tmp/revo-www').rglob('index-*.js'))
+          if not js_files:
+              raise SystemExit('frontend bundle missing')
+          text = js_files[0].read_text(errors='replace')
+          terms = ['Start','Pause','Stop','ellipsis','MoreHorizontal','GripHorizontal','DotsHorizontal','menu']
+          for term in terms:
+              print(f'===== TERM {term} =====')
+              matches = list(re.finditer(re.escape(term), text, re.I))
+              print('count=', len(matches))
+              for m in matches[:12]:
+                  a=max(0,m.start()-700); b=min(len(text),m.end()+700)
+                  print(text[a:b].replace('\n',' '))
+                  print('\n---')
