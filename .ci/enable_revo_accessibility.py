@@ -46,7 +46,7 @@ def wake_and_unlock():
         result = shell(*args, check=False)
         if result.stdout:
             print(result.stdout, flush=True)
-    time.sleep(0.4)
+    time.sleep(0.35)
 
 
 def take_screenshot(path):
@@ -71,32 +71,28 @@ def print_filtered(title, output, patterns=None, max_lines=160):
 
 
 def print_failure_diagnostics(stage, png_path):
-    window = shell("dumpsys", "window", check=False).stdout
     print_filtered(
         f"WINDOW FOCUS {stage}",
-        window,
+        shell("dumpsys", "window", check=False).stdout,
         [r"mCurrentFocus", r"mFocusedApp", r"mObscuringWindow", r"mTopFocusedDisplayId"],
     )
-
-    activities = shell("dumpsys", "activity", "activities", check=False).stdout
     print_filtered(
         f"RESUMED ACTIVITIES {stage}",
-        activities,
-        [r"mResumedActivity", r"topResumedActivity", r"ResumedActivity", r"Task\{"],
+        shell("dumpsys", "activity", "activities", check=False).stdout,
+        [r"mResumedActivity", r"topResumedActivity", r"ResumedActivity", r"Task\\{"],
         max_lines=120,
     )
-
-    top = shell("dumpsys", "activity", "top", check=False).stdout
     print_filtered(
         f"ACTIVITY TOP {stage}",
-        top,
+        shell("dumpsys", "activity", "top", check=False).stdout,
         [r"ACTIVITY", r"mResumed", r"mStopped", r"mCurrentFocus", r"settings"],
         max_lines=120,
     )
-
-    a11y_help = shell("cmd", "accessibility", "help", check=False).stdout
-    print_filtered(f"CMD ACCESSIBILITY HELP {stage}", a11y_help, max_lines=160)
-
+    print_filtered(
+        f"CMD ACCESSIBILITY HELP {stage}",
+        shell("cmd", "accessibility", "help", check=False).stdout,
+        max_lines=160,
+    )
     if png_path.exists():
         encoded = base64.b64encode(png_path.read_bytes()).decode("ascii")
         print(f"REVO_SCREENSHOT_BASE64_STAGE={stage}", flush=True)
@@ -108,26 +104,21 @@ def capture(stage):
     remote = "/sdcard/revo-a11y.xml"
     xml_path = ARTIFACT_DIR / f"a11y-{stage}.xml"
     png_path = ARTIFACT_DIR / f"a11y-{stage}.png"
-
-    if xml_path.exists():
-        xml_path.unlink()
+    xml_path.unlink(missing_ok=True)
 
     last_output = ""
     for retry in range(5):
         wake_and_unlock()
         shell("rm", "-f", remote, check=False)
-
-        attempts = (
+        for command in (
             ("uiautomator", "dump", "--compressed", remote),
             ("uiautomator", "dump", remote),
-        )
-        for command in attempts:
+        ):
             dump = shell(*command, check=False)
             last_output = dump.stdout or ""
             if last_output:
                 print(f"UI DUMP retry={retry} command={' '.join(command)}", flush=True)
                 print(last_output, flush=True)
-
             pulled = adb("pull", remote, str(xml_path), check=False)
             if pulled.stdout:
                 print(pulled.stdout, flush=True)
@@ -139,7 +130,6 @@ def capture(stage):
                 except ET.ParseError as exc:
                     print(f"Invalid UI hierarchy retry={retry}: {exc}", flush=True)
                     xml_path.unlink(missing_ok=True)
-
         time.sleep(0.8 + retry * 0.2)
 
     take_screenshot(png_path)
@@ -228,10 +218,6 @@ def first_switch(root):
     return None
 
 
-def page_has_revolution(root):
-    return find_by_text(root, ["revolution macro", "revolution android", "revolution"]) is not None
-
-
 def dump_visible_labels(root):
     values = []
     for node in root.iter():
@@ -259,7 +245,6 @@ def open_service_settings():
     output = detail.stdout or ""
     if output:
         print(output, flush=True)
-
     if detail.returncode != 0 or "Error:" in output or "unable to resolve" in output.lower():
         print("Accessibility detail deep-link unavailable; falling back to general Accessibility Settings", flush=True)
         fallback = shell("am", "start", "-a", "android.settings.ACCESSIBILITY_SETTINGS", check=False)
@@ -269,8 +254,11 @@ def open_service_settings():
 
 
 def main():
-    help_output = shell("cmd", "accessibility", "help", check=False).stdout
-    print_filtered("CMD ACCESSIBILITY HELP INITIAL", help_output, max_lines=160)
+    print_filtered(
+        "CMD ACCESSIBILITY HELP INITIAL",
+        shell("cmd", "accessibility", "help", check=False).stdout,
+        max_lines=160,
+    )
     open_service_settings()
 
     for attempt in range(16):
@@ -283,47 +271,47 @@ def main():
         parents = parent_map(root)
         dump_visible_labels(root)
 
-        # Confirmation dialogs take priority once a toggle is pressed.
-        node = find_by_text(root, ["allow"], exact=True)
-        if node is not None:
-            click(node, parents, "confirmation Allow")
-            continue
-        node = find_by_text(root, ["ok"], exact=True)
-        if node is not None:
-            click(node, parents, "confirmation OK")
-            continue
-        node = find_by_text(root, ["continue"], exact=True)
-        if node is not None:
-            click(node, parents, "confirmation Continue")
-            continue
-
-        # On the service detail page, toggle the service before clicking the title again.
-        if page_has_revolution(root):
+        # Confirmation dialogs after enabling the service.
+        for text in ("allow", "ok", "continue"):
+            node = find_by_text(root, [text], exact=True)
+            if node is not None:
+                click(node, parents, f"confirmation {text}")
+                break
+        else:
+            # Service detail page: prefer the explicit 'Use ...' row or switch.
             node = find_by_text(root, ["use revolution macro", "use revolution android", "use service"])
             if node is not None:
                 click(node, parents, "service enable row")
                 continue
+
             switch = first_switch(root)
             if switch is not None:
                 click(switch, parents, "service switch")
                 continue
 
-        # Pixel/Android 15 may place third-party services under Downloaded apps.
-        node = find_by_text(root, ["downloaded apps", "installed apps"], exact=True)
-        if node is not None:
-            click(node, parents, "third-party accessibility apps")
+            # Run-9 evidence showed Revolution Macro is already directly visible under
+            # Downloaded apps on the main Accessibility page. Click this row BEFORE the
+            # Downloaded apps category heading; the old ordering repeatedly tapped the
+            # non-navigating category label and never entered the service detail page.
+            node = find_by_text(root, ["revolution macro", "revolution android"], exact=True)
+            if node is not None:
+                click(node, parents, "Revolution accessibility service row")
+                continue
+
+            node = find_by_text(root, ["downloaded apps", "installed apps"], exact=True)
+            if node is not None:
+                click(node, parents, "third-party accessibility apps")
+                continue
+
+            print(f"No known Accessibility UI target on attempt {attempt}", flush=True)
+            time.sleep(0.8)
             continue
 
-        node = find_by_text(root, ["revolution macro", "revolution android", "revolution"])
-        if node is not None:
-            click(node, parents, "Revolution accessibility service")
-            continue
-
-        print(f"No known Accessibility UI target on attempt {attempt}", flush=True)
-        time.sleep(0.8)
+        continue
 
     root = capture("failed-final")
     dump_visible_labels(root)
+    print_failure_diagnostics("failed-final", ARTIFACT_DIR / "a11y-failed-final.png")
     raise SystemExit("Revolution Accessibility could not be enabled through Android Settings UI")
 
 
