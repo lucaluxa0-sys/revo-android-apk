@@ -55,10 +55,10 @@ jobs:
           s=p.read_text()
           s=s.replace('import android.webkit.WebView;', 'import android.webkit.WebView;\nimport android.util.Log;')
           marker='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }'''
-          repl='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }\n        if (getIntent() != null && getIntent().getBooleanExtra("engineProbe", false)) {\n            engineProbeWhenReady(0);\n        }'''
+          repl='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }\n        android.content.IntentFilter engineProbeFilter = new android.content.IntentFilter("com.revolution.android.ENGINE_PROBE");\n        registerReceiver(new android.content.BroadcastReceiver() {\n            @Override\n            public void onReceive(android.content.Context context, android.content.Intent intent) {\n                Log.e("RevoEngineProbe", "broadcast received");\n                engineProbeWhenReady(0);\n            }\n        }, engineProbeFilter, android.content.Context.RECEIVER_EXPORTED);\n        Log.e("RevoEngineProbe", "receiver registered");'''
           if marker not in s: raise SystemExit('onCreate marker missing')
           s=s.replace(marker,repl,1)
-          insert='''\n    @Override\n    protected void onNewIntent(android.content.Intent intent) {\n        super.onNewIntent(intent);\n        setIntent(intent);\n        if (intent != null && intent.getBooleanExtra("engineProbe", false)) {\n            engineProbeWhenReady(0);\n        }\n    }\n\n    private void engineProbeWhenReady(int attempt) {\n        if (isFinishing()) return;\n        if (RevoAccessibilityService.get() != null) {\n            String cfg = "{\\\"routine\\\":\\\"gather\\\",\\\"account\\\":\\\"Probe\\\",\\\"patternName\\\":\\\"e_lol\\\",\\\"width\\\":2,\\\"length\\\":8,\\\"msPerStud\\\":1,\\\"keyDelayMs\\\":1,\\\"requireRobloxForeground\\\":false}";\n            Log.e("RevoEngineProbe", "configured " + bridge.configureMacro(cfg));\n            bridge.startMacro("Probe");\n            new Handler(Looper.getMainLooper()).postDelayed(() ->\n                Log.e("RevoEngineProbe", "state " + bridge.getEngineState()), 3000);\n            return;\n        }\n        if (attempt >= 120) {\n            Log.e("RevoEngineProbe", "ERROR accessibility never connected");\n            return;\n        }\n        new Handler(Looper.getMainLooper()).postDelayed(() -> engineProbeWhenReady(attempt + 1), 250);\n    }\n'''
+          insert='''\n    private void engineProbeWhenReady(int attempt) {\n        if (isFinishing()) return;\n        if (RevoAccessibilityService.get() != null) {\n            String cfg = "{\\\"routine\\\":\\\"gather\\\",\\\"account\\\":\\\"Probe\\\",\\\"patternName\\\":\\\"e_lol\\\",\\\"width\\\":2,\\\"length\\\":8,\\\"msPerStud\\\":1,\\\"keyDelayMs\\\":1,\\\"requireRobloxForeground\\\":false}";\n            Log.e("RevoEngineProbe", "configured " + bridge.configureMacro(cfg));\n            bridge.startMacro("Probe");\n            new Handler(Looper.getMainLooper()).postDelayed(() ->\n                Log.e("RevoEngineProbe", "state " + bridge.getEngineState()), 3000);\n            return;\n        }\n        if (attempt >= 120) {\n            Log.e("RevoEngineProbe", "ERROR accessibility never connected");\n            return;\n        }\n        new Handler(Looper.getMainLooper()).postDelayed(() -> engineProbeWhenReady(attempt + 1), 250);\n    }\n'''
           stop_marker='''    // Deliberately DO NOT stop MacroEngine here.'''
           if stop_marker not in s: raise SystemExit('class insertion marker missing')
           s=s.replace(stop_marker, insert+'\n'+stop_marker,1)
@@ -104,10 +104,15 @@ jobs:
             adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt
             grep -Fq 'RevoAccessibilityService' emulator-artifacts/accessibility.txt
             adb logcat -c
-            adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            adb shell dumpsys activity activities > emulator-artifacts/activities-before-probe.txt
+            adb shell am broadcast -a com.revolution.android.ENGINE_PROBE -p com.revolution.android > emulator-artifacts/probe-broadcast.txt
+            cat emulator-artifacts/probe-broadcast.txt
             sleep 8
             adb exec-out screencap -p > emulator-artifacts/revo-v029-engine.png
+            adb shell dumpsys activity activities > emulator-artifacts/activities-after-probe.txt
             adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt
+            grep 'RevoEngineProbe.*broadcast received' emulator-artifacts/logcat-v029-engine.txt
             grep 'RevoEngineProbe.*configured {' emulator-artifacts/logcat-v029-engine.txt
             grep 'RevoGatherAdapter.*configured pattern=e_lol steps=18' emulator-artifacts/logcat-v029-engine.txt
             grep 'RevoGatherAdapter.*action pattern=e_lol' emulator-artifacts/logcat-v029-engine.txt | head -n 5
