@@ -9,6 +9,7 @@ on:
       - '.ci/source.part01'
       - '.ci/source.part02'
       - '.ci/source.part03'
+      - '.ci/enable_revo_accessibility.py'
       - 'patches/android-backend-v0.2.9.js'
       - '.github/workflows/test-v029-engine-adapter.yml'
 
@@ -44,6 +45,7 @@ jobs:
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'configureMacro(String json)' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'isRobloxForeground()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          python -m py_compile .ci/enable_revo_accessibility.py
           node --check patches/android-backend-v0.2.9.js
       - name: Instrument controlled engine probe
         shell: python
@@ -89,10 +91,9 @@ jobs:
             adb shell cmd appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS > emulator-artifacts/restricted-appop.txt
             cat emulator-artifacts/restricted-appop.txt
             grep -qi 'allow' emulator-artifacts/restricted-appop.txt
-            adb logcat -c
-            adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
-            adb shell settings put secure enabled_accessibility_services com.revolution.android/com.revolution.android.RevoAccessibilityService
-            adb shell settings put secure accessibility_enabled 1
+            adb shell cmd accessibility help > emulator-artifacts/cmd-accessibility-help.txt 2>&1 || true
+            adb shell am start -W -n com.revolution.android/.MainActivity
+            python3 .ci/enable_revo_accessibility.py
             adb shell settings get secure enabled_accessibility_services > emulator-artifacts/enabled-setting.txt
             adb shell settings get secure accessibility_enabled > emulator-artifacts/accessibility-enabled.txt
             cat emulator-artifacts/enabled-setting.txt
@@ -100,8 +101,10 @@ jobs:
             grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
             grep -Fxq '1' emulator-artifacts/accessibility-enabled.txt
             adb shell dumpsys package com.revolution.android > emulator-artifacts/package.txt
-            sh -c 'i=0; while [ "$i" -lt 30 ]; do adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt; if grep -Fq "RevoAccessibilityService" emulator-artifacts/accessibility.txt; then exit 0; fi; i=$((i+1)); sleep 1; done; adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt; cat emulator-artifacts/accessibility.txt; exit 1'
-            cat emulator-artifacts/accessibility.txt
+            adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt
+            grep -Fq 'RevoAccessibilityService' emulator-artifacts/accessibility.txt
+            adb logcat -c
+            adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
             sleep 8
             adb exec-out screencap -p > emulator-artifacts/revo-v029-engine.png
             adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt
