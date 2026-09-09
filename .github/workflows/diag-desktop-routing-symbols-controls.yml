@@ -1,0 +1,78 @@
+name: Diagnose desktop routing symbols and Start control strip
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-routing-symbols-controls.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned desktop Revolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache /tmp/revo-www
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/revo-www
+
+      - name: Find exact Start Pause Stop control strip
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          js = next(Path('/tmp/revo-www').rglob('index-*.js'))
+          text = js.read_text(errors='replace')
+          # Prefer snippets that contain a real Macro Start call and button-ish nearby UI.
+          hits=[]
+          for m in re.finditer(r'Jo\(', text):
+              a=max(0,m.start()-2500); b=min(len(text),m.end()+3500)
+              s=text[a:b]
+              score=sum(tok in s for tok in ['Pause','Stop','Start','children:', 'onClick'])
+              if score>=4:
+                  hits.append((score,m.start(),s))
+          hits=sorted(hits, reverse=True)[:10]
+          print('START_CALL_CANDIDATES=',len(hits))
+          for score,pos,s in hits:
+              print(f'===== candidate score={score} pos={pos} =====')
+              print(s.replace('\n',' '))
+          # Also locate Mantine dot loaders/menus near those candidates.
+          for term in ['type:"dots"','type:\"dots\"','children:e.jsx(no','children:e.jsx(gr']:
+              print(f'===== {term} =====')
+              for m in list(re.finditer(re.escape(term), text))[:30]:
+                  a=max(0,m.start()-1200); b=min(len(text),m.end()+1200)
+                  s=text[a:b]
+                  if 'Start' in s or 'Pause' in s or 'Stop' in s or 'Macro' in s:
+                      print(s.replace('\n',' '))
+                      print('---')
+
+      - name: Print Go build metadata and routing-related symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '===== go version -m ====='
+          go version -m .cache/RevolutionMacro.exe || true
+          echo '===== routing symbols ====='
+          go tool nm .cache/RevolutionMacro.exe 2>/tmp/nm.err | \
+            grep -Ei 'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move' | \
+            head -n 1200 || true
+          echo '===== nm stderr ====='
+          cat /tmp/nm.err || true
+
+      - name: Extract routing-related printable strings
+        shell: bash
+        run: |
+          set -euo pipefail
+          strings -a -n 5 .cache/RevolutionMacro.exe > /tmp/revo.strings
+          grep -Ei 'hive claim|preferred hive|claim hive|claim.*hive|walk.*hive|hive.*walk|route.*field|field.*route|travel.*field|field.*travel|go.*field|field.*gather|red cannon|reset character|spawn|join.*hive|pathing|routing' /tmp/revo.strings | head -n 2000 || true
