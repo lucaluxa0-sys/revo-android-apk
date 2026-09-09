@@ -1,0 +1,148 @@
+name: Build Revolution Android v0.2.10 Samsung test APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-v0210-samsung-test.yml'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
+      - 'patches/android-backend-v0.2.6.js'
+      - 'patches/android-backend-v0.2.8.js'
+      - 'patches/android-backend-v0.2.8.1.js'
+      - 'patches/android-backend-v0.2.8.2.js'
+      - 'patches/android-backend-v0.2.9.js'
+      - 'patches/android-backend-v0.2.10.js'
+      - 'tools/patch-revo-frontend-v028.py'
+      - 'tools/recover-vite-pngs.js'
+
+permissions:
+  contents: write
+
+jobs:
+  build-samsung-test-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore current native source
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -f revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'roblox-foreground-frame-delta-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'configureMacro(String json)' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+
+      - name: Restore exact Revolution desktop frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www \
+            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 -c "import json; from pathlib import Path; root=Path('revo-android/app/src/main/assets/www'); m=json.loads((root/'revo-png-manifest.json').read_text()); assert m['count']==113; assert all((root/'assets'/x).is_file() for x in m['assets']); print('PASS: recovered',m['count'],'desktop PNG assets')"
+          JS=$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
+          test -n "$JS"
+          python3 tools/patch-revo-frontend-v028.py "$JS"
+
+      - name: Assemble complete Android runtime through v0.2.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q '__revoAndroidV0210PatternsInstalled' revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q "'e_lol'" revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q "'CornerXSnake'" revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q "const VERSION = '0.2.10'" revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Install real Revolution icon and stamp test version
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/revo-icon
+          mkdir -p /tmp/revo-icon revo-android/app/src/main/res/drawable-nodpi
+          (cd /tmp/revo-icon && 7z x -y "$GITHUB_WORKSPACE/.cache/RevolutionMacro.exe" '.rsrc/0/ICON/1' >/dev/null)
+          cp /tmp/revo-icon/.rsrc/0/ICON/1 revo-android/app/src/main/res/drawable-nodpi/revo_icon.png
+          file revo-android/app/src/main/res/drawable-nodpi/revo_icon.png | grep -q 'PNG image data, 256 x 256'
+          python3 -c "from pathlib import Path; import re; p=Path('revo-android/app/src/main/AndroidManifest.xml'); s=p.read_text(); s=re.sub(r'\\s+android:icon=\"[^\"]*\"','',s); s=re.sub(r'\\s+android:roundIcon=\"[^\"]*\"','',s); s=s.replace('<application','<application\\n        android:icon=\"@drawable/revo_icon\"\\n        android:roundIcon=\"@drawable/revo_icon\"',1); p.write_text(s)"
+          python3 -c "from pathlib import Path; p=Path('revo-android/app/build.gradle.kts'); s=p.read_text(); s=s.replace('versionName = \"0.2.3-dev\"','versionName = \"0.2.10-samsung-test\"'); p.write_text(s); assert 'versionName = \"0.2.10-samsung-test\"' in s"
+
+      - name: Build clean Samsung test APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q '__revoAndroidV0210PatternsInstalled'
+          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "'e_lol'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
+          grep -q "versionName='0.2.10-samsung-test'" /tmp/badging.txt
+          cp "$APK" RevolutionMacro-Android-v0.2.10-Samsung-Test.apk
+          sha256sum RevolutionMacro-Android-v0.2.10-Samsung-Test.apk | tee SHA256SUMS-v0210-samsung-test.txt
+          printf 'repo=%s\ncommit=%s\ndesktop_release=%s\ndesktop_sha256=%s\nfix=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" 'nosyliam/revolution-macro v0.9c-hotfix3' \
+            '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb' \
+            'restore state.config.availablePatterns for real Gather selector' > BUILD_PROVENANCE-v0210-samsung-test.txt
+
+      - name: Upload Samsung test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevolutionMacro-Android-v0.2.10-Samsung-Test
+          path: |
+            RevolutionMacro-Android-v0.2.10-Samsung-Test.apk
+            SHA256SUMS-v0210-samsung-test.txt
+            BUILD_PROVENANCE-v0210-samsung-test.txt
+          if-no-files-found: error
+
+      - name: Publish Samsung test APK into repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add RevolutionMacro-Android-v0.2.10-Samsung-Test.apk \
+                  SHA256SUMS-v0210-samsung-test.txt \
+                  BUILD_PROVENANCE-v0210-samsung-test.txt
+          if git diff --cached --quiet; then
+            echo 'Repository already contains this exact Samsung test build.'
+            exit 0
+          fi
+          git commit -m 'Publish Revolution Android v0.2.10 Samsung test APK [skip ci]'
+          git push origin HEAD:main
