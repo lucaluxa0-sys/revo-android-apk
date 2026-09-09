@@ -83,6 +83,11 @@ jobs:
             set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            # Android 13+ blocks sideloaded accessibility services until the user
+            # explicitly allows Restricted Settings. CI grants that exact AppOp;
+            # the shipping app must guide a real user through the system UI instead.
+            adb shell appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
+            adb shell appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS
             adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
             adb shell settings put secure accessibility_enabled 1
             sleep 2
