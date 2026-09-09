@@ -21,63 +21,154 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
+          $work = Join-Path $env:RUNNER_TEMP 'revo-runtime-probe'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $exe = Join-Path $work 'RevolutionMacro.exe'
           Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe' -OutFile $exe
           $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($sha -ne '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb') { throw "SHA mismatch: $sha" }
           Write-Host "PASS exact EXE $sha"
+          Write-Host "Probe working directory: $work"
 
-      - name: Launch Revo and wait for its real Storage config
+      - name: Snapshot candidate runtime files before launch
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:RUNNER_TEMP 'RevolutionMacro.exe'
-          $p = Start-Process -FilePath $exe -PassThru
-          $p.Id | Set-Content (Join-Path $env:RUNNER_TEMP 'revo-pid.txt')
-          Write-Host "Started PID=$($p.Id)"
+          $work = Join-Path $env:RUNNER_TEMP 'revo-runtime-probe'
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $roots = @($work, $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+          $rows = foreach ($root in $roots) {
+            Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in @('.yaml','.yml','.json','.bin','.db','.sqlite','.toml','.ini') -or
+                $_.Name -match '(?i)revolution|pattern|config|setting|planter|account'
+              } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  FullName = $_.FullName
+                  Length = $_.Length
+                  LastWriteTimeUtc = $_.LastWriteTimeUtc.ToString('o')
+                }
+              }
+          }
+          $rows | Sort-Object FullName -Unique | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $out 'before.json') -Encoding UTF8
+          Write-Host "Baseline candidate count: $(@($rows).Count)"
 
-          $found = $null
-          for ($i = 0; $i -lt 60; $i++) {
+      - name: Launch Revo in controlled working directory and discover writes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'revo-runtime-probe'
+          $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
+          $exe = Join-Path $work 'RevolutionMacro.exe'
+          $launch = [DateTime]::UtcNow
+          $launch.ToString('o') | Set-Content (Join-Path $out 'launch-time-utc.txt')
+          $p = Start-Process -FilePath $exe -WorkingDirectory $work -PassThru
+          $p.Id | Set-Content (Join-Path $out 'revo-pid.txt')
+          Write-Host "Started PID=$($p.Id) WorkingDirectory=$work at $($launch.ToString('o'))"
+
+          $roots = @($work, $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+          $exact = $null
+          for ($i = 0; $i -lt 45; $i++) {
             Start-Sleep -Seconds 2
-            $found = Get-ChildItem $env:APPDATA -Filter config.yaml -File -Recurse -Force -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match '(?i)\\revolution\\.*\\Storage\\config\.yaml$' } |
-              Select-Object -First 1
-            if ($found) {
-              Write-Host "Found config after $((($i + 1) * 2))s: $($found.FullName)"
+            $candidates = foreach ($root in $roots) {
+              Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.LastWriteTimeUtc -ge $launch.AddSeconds(-2) -and (
+                    $_.Extension -in @('.yaml','.yml','.json','.bin','.db','.sqlite','.toml','.ini') -or
+                    $_.Name -match '(?i)revolution|pattern|config|setting|planter|account'
+                  )
+                }
+            }
+            $exact = @($candidates | Where-Object { $_.Name -ieq 'config.yaml' -and $_.DirectoryName -match '(?i)Storage' } | Select-Object -First 1)
+            if ($exact.Count -gt 0) {
+              Write-Host "Found Storage/config.yaml after $((($i + 1) * 2))s: $($exact[0].FullName)"
               break
             }
-            if (($i + 1) % 10 -eq 0) { Write-Host "Still waiting for Revo Storage... $((($i + 1) * 2))s" }
+            if (($i + 1) % 10 -eq 0) {
+              try { $p.Refresh() } catch {}
+              Write-Host "Probe $((($i + 1) * 2))s: processExited=$($p.HasExited) recentCandidates=$(@($candidates).Count)"
+            }
           }
-          if (-not $found) { throw 'Revo did not create Storage/config.yaml within 120 seconds.' }
-          $found.DirectoryName | Set-Content (Join-Path $env:RUNNER_TEMP 'revo-storage-path.txt')
 
-      - name: Capture exact Revolution Storage and userpatterns
+          try { $p.Refresh() } catch {}
+          "HasExited=$($p.HasExited)" | Set-Content (Join-Path $out 'process-state.txt')
+          if ($p.HasExited) { "ExitCode=$($p.ExitCode)" | Add-Content (Join-Path $out 'process-state.txt') }
+
+          $after = foreach ($root in $roots) {
+            Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.LastWriteTimeUtc -ge $launch.AddSeconds(-2) -and (
+                  $_.Extension -in @('.yaml','.yml','.json','.bin','.db','.sqlite','.toml','.ini') -or
+                  $_.Name -match '(?i)revolution|pattern|config|setting|planter|account'
+                )
+              } |
+              ForEach-Object {
+                [pscustomobject]@{
+                  FullName = $_.FullName
+                  DirectoryName = $_.DirectoryName
+                  Name = $_.Name
+                  Length = $_.Length
+                  LastWriteTimeUtc = $_.LastWriteTimeUtc.ToString('o')
+                }
+              }
+          }
+          $after = @($after | Sort-Object FullName -Unique)
+          $after | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $out 'created-or-touched-candidates.json') -Encoding UTF8
+          Write-Host "===== FILES CREATED/TOUCHED AFTER REVO LAUNCH ====="
+          $after | Sort-Object LastWriteTimeUtc | Format-Table LastWriteTimeUtc, Length, FullName -AutoSize | Out-String -Width 4096 | Write-Host
+
+          $storageCandidates = @($after | Where-Object {
+            $_.DirectoryName -match '(?i)Storage' -or $_.FullName -match '(?i)revolution|revo'
+          })
+          $storageCandidates | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $out 'revo-storage-candidates.json') -Encoding UTF8
+
+          $storage = $null
+          $config = $after | Where-Object { $_.Name -ieq 'config.yaml' -and $_.DirectoryName -match '(?i)Storage' } | Select-Object -First 1
+          if ($config) { $storage = $config.DirectoryName }
+          if (-not $storage) {
+            $anyStorageFile = $after | Where-Object { $_.DirectoryName -match '(?i)Storage' } | Select-Object -First 1
+            if ($anyStorageFile) { $storage = $anyStorageFile.DirectoryName }
+          }
+          if ($storage) {
+            $storage | Set-Content (Join-Path $out 'revo-storage-path.txt')
+            Write-Host "Resolved Storage path: $storage"
+          } else {
+            Write-Warning 'No Storage directory resolved yet; evidence artifact will still be uploaded.'
+          }
+
+      - name: Capture exact Revolution Storage and userpatterns when present
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $storage = (Get-Content (Join-Path $env:RUNNER_TEMP 'revo-storage-path.txt') -Raw).Trim()
-          Write-Host "Storage path: $storage"
-
-          foreach ($name in @('config.yaml','settings.yaml','accounts.yaml','planters.yaml')) {
-            $src = Join-Path $storage $name
-            if (Test-Path $src -PathType Leaf) {
-              Copy-Item -LiteralPath $src -Destination (Join-Path $out $name) -Force
-              $h = (Get-FileHash $src -Algorithm SHA256).Hash.ToLowerInvariant()
-              Write-Host "CAPTURED $name bytes=$((Get-Item $src).Length) sha256=$h"
-            } else {
-              Write-Host "MISSING $name"
+          $pathFile = Join-Path $out 'revo-storage-path.txt'
+          if (Test-Path $pathFile) {
+            $storage = (Get-Content $pathFile -Raw).Trim()
+            Write-Host "Storage path: $storage"
+            $storageOut = Join-Path $out 'Storage'
+            New-Item -ItemType Directory -Force -Path $storageOut | Out-Null
+            Get-ChildItem -LiteralPath $storage -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName -Destination $storageOut -Force
+              $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              Write-Host "CAPTURED $($_.Name) bytes=$($_.Length) sha256=$h"
             }
           }
 
-          $up = Join-Path $env:USERPROFILE '.revolution-macro\userpatterns'
-          if (Test-Path $up) {
-            $upOut = Join-Path $out 'userpatterns'
-            New-Item -ItemType Directory -Force -Path $upOut | Out-Null
-            Get-ChildItem $up -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination $upOut -Force
-              Write-Host "USERPATTERN $($_.Name) bytes=$($_.Length)"
+          $userPatternCandidates = @(
+            (Join-Path $env:USERPROFILE '.revolution-macro\userpatterns'),
+            (Join-Path $env:APPDATA 'revolution\userpatterns'),
+            (Join-Path $env:LOCALAPPDATA 'revolution\userpatterns')
+          )
+          foreach ($up in $userPatternCandidates) {
+            if (Test-Path $up) {
+              $upOut = Join-Path $out 'userpatterns'
+              New-Item -ItemType Directory -Force -Path $upOut | Out-Null
+              Get-ChildItem $up -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $upOut -Force
+                Write-Host "USERPATTERN $($_.FullName) bytes=$($_.Length)"
+              }
             }
           }
 
@@ -85,11 +176,9 @@ jobs:
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'revo-runtime-data-exact'
-          foreach ($name in @('config.yaml','settings.yaml')) {
-            $f = Join-Path $out $name
-            if (-not (Test-Path $f)) { continue }
-            Write-Host "===== $name targeted matches ====="
-            Select-String -Path $f -Pattern 'patterns:|gatherPattern|availablePatterns|sprinklerType|backpackPercent|walkReturn|driftComp|repetitions|dataRepoVersion|dataRepoHash|patternMemberType|pattern:' -Context 3,10 |
+          Get-ChildItem -LiteralPath $out -File -Recurse -Include *.yaml,*.yml,*.json -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "===== $($_.FullName) targeted matches ====="
+            Select-String -LiteralPath $_.FullName -Pattern 'patterns:|gatherPattern|availablePatterns|sprinklerType|backpackPercent|walkReturn|driftComp|repetitions|dataRepoVersion|dataRepoHash|patternMemberType|pattern:' -Context 3,10 -ErrorAction SilentlyContinue |
               Select-Object -First 250 |
               ForEach-Object { $_.ToString() }
           }
@@ -100,10 +189,10 @@ jobs:
         run: |
           Get-Process RevolutionMacro -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-      - name: Upload exact runtime data
+      - name: Upload exact runtime discovery evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: revolution-desktop-runtime-data-exact
           path: ${{ runner.temp }}/revo-runtime-data-exact/
-          if-no-files-found: warn
+          if-no-files-found: error
