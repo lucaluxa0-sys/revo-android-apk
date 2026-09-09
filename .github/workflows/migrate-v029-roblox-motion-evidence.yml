@@ -1,0 +1,229 @@
+name: Migrate v0.2.9 Roblox movement evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/migrate-v029-roblox-motion-evidence.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: migrate-v029-roblox-motion-evidence
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pin live main before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          git rev-parse HEAD | tee /tmp/revo-motion-base-sha
+
+      - name: Reconstruct current Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -f revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+
+      - name: Add Roblox foreground visual movement evidence
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java'
+          if grep -q 'roblox-foreground-frame-delta-v1' "$target"; then
+            echo 'Movement evidence already present; no source rewrite needed.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat > /tmp/revo-motion.patch <<'PATCH'
+--- a/revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
++++ b/revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+@@ -51,6 +51,11 @@
+     private volatile int patternStep;
+     private volatile long patternIteration, nextActionAtMs, lastActionAtMs, actionCount;
+     private volatile boolean lastGestureAccepted;
++    private volatile int visualMovementSamples, visualMovementConfirmedSamples;
++    private volatile boolean lastVisualMovementConfirmed;
++    private volatile double lastVisualMeanDelta, lastVisualChangedFraction;
++    private volatile long visualProbeAfterMs;
++    private volatile int[] visualBaseline;
+     private volatile String lastDecision = "not-configured", lastAction = "", lastError = "";
+ 
+     RevoGatherAdapter(int displayId) { this.displayId = displayId; }
+@@ -104,6 +109,9 @@
+     private void reset() {
+         patternStep = 0; patternIteration = 0; nextActionAtMs = 0; lastActionAtMs = 0;
+         actionCount = 0; lastGestureAccepted = false; lastAction = "";
++        visualMovementSamples = 0; visualMovementConfirmedSamples = 0;
++        lastVisualMovementConfirmed = false; lastVisualMeanDelta = 0; lastVisualChangedFraction = 0;
++        visualProbeAfterMs = 0; visualBaseline = null;
+     }
+ 
+     private static double positiveOr(double v, double fallback) {
+@@ -116,6 +124,66 @@
+         return s == null ? "" : s.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
+     }
+ 
++    /**
++     * Coarse world-view signature used only as movement evidence. The crop avoids
++     * Roblox's lower touch controls and most top HUD chrome so accepted joystick
++     * gestures must also produce visible scene response before we call them proven.
++     */
++    private static int[] visualSignature(Bitmap frame) {
++        if (frame == null || frame.isRecycled()) return null;
++        int w = frame.getWidth(), h = frame.getHeight();
++        if (w < 32 || h < 32) return null;
++        final int cols = 12, rows = 8;
++        int left = Math.max(0, Math.min(w - 1, Math.round(w * 0.20f)));
++        int right = Math.max(left + 1, Math.min(w - 1, Math.round(w * 0.86f)));
++        int top = Math.max(0, Math.min(h - 1, Math.round(h * 0.12f)));
++        int bottom = Math.max(top + 1, Math.min(h - 1, Math.round(h * 0.68f)));
++        int[] out = new int[cols * rows];
++        int k = 0;
++        try {
++            for (int y = 0; y < rows; y++) {
++                int py = top + Math.round((bottom - top) * (y + 0.5f) / rows);
++                py = Math.max(0, Math.min(h - 1, py));
++                for (int x = 0; x < cols; x++) {
++                    int px = left + Math.round((right - left) * (x + 0.5f) / cols);
++                    px = Math.max(0, Math.min(w - 1, px));
++                    int color = frame.getPixel(px, py);
++                    int r = (color >> 16) & 0xff, g = (color >> 8) & 0xff, b = color & 0xff;
++                    out[k++] = (77 * r + 150 * g + 29 * b) >> 8;
++                }
++            }
++            return out;
++        } catch (Throwable ignored) {
++            return null;
++        }
++    }
++
++    private void collectVisualMovementEvidence(Bitmap frame, long now, boolean robloxForeground) {
++        int[] before = visualBaseline;
++        if (before == null || now < visualProbeAfterMs) return;
++        visualBaseline = null;
++        int[] after = visualSignature(frame);
++        if (after == null || after.length != before.length || before.length == 0) return;
++        long absoluteDelta = 0;
++        int materiallyChanged = 0;
++        for (int i = 0; i < before.length; i++) {
++            int delta = Math.abs(after[i] - before[i]);
++            absoluteDelta += delta;
++            if (delta >= 14) materiallyChanged++;
++        }
++        double meanDelta = absoluteDelta / (255.0 * before.length);
++        double changedFraction = materiallyChanged / (double) before.length;
++        boolean confirmed = robloxForeground && (meanDelta >= 0.035 || changedFraction >= 0.20);
++        visualMovementSamples++;
++        if (confirmed) visualMovementConfirmedSamples++;
++        lastVisualMeanDelta = meanDelta;
++        lastVisualChangedFraction = changedFraction;
++        lastVisualMovementConfirmed = confirmed;
++        Log.i("RevoMovementEvidence", String.format(Locale.US,
++                "sample=%d confirmed=%s meanDelta=%.4f changedFraction=%.3f robloxForeground=%s display=%d",
++                visualMovementSamples, confirmed, meanDelta, changedFraction, robloxForeground, displayId));
++    }
++
+     /** Exact command geometry from desktop patterns/gather/e_lol.lua. */
+     private static void buildRecoveredPattern(String name, double width, double length, List<MoveStep> out) {
+         if (!"elol".equals(normalize(name))) return;
+@@ -145,10 +213,12 @@
+         }
+         RevoAccessibilityService svc = RevoAccessibilityService.get();
+         if (svc == null) { lastDecision = "waiting:accessibility"; return; }
+-        if (c.requireRobloxForeground && !svc.isRobloxForeground()) {
++        boolean robloxForeground = svc.isRobloxForeground();
++        long now = SystemClock.elapsedRealtime();
++        collectVisualMovementEvidence(frame, now, robloxForeground);
++        if (c.requireRobloxForeground && !robloxForeground) {
+             lastDecision = "waiting:roblox-foreground:" + svc.activePackageName(); return;
+         }
+-        long now = SystemClock.elapsedRealtime();
+         if (now < nextActionAtMs) { lastDecision = "waiting:step-duration"; return; }
+         if (patternStep >= c.steps.size()) { patternStep = 0; patternIteration++; }
+         MoveStep step = c.steps.get(patternStep);
+@@ -163,6 +233,10 @@
+             case RIGHT: tx += radius; break;
+         }
+         boolean accepted = svc.joystick(displayId, cx, cy, tx, ty, durationMs);
++        if (accepted && c.requireRobloxForeground && robloxForeground) {
++            visualBaseline = visualSignature(frame);
++            visualProbeAfterMs = now + durationMs + Math.max(100, c.keyDelayMs);
++        }
+         lastGestureAccepted = accepted; lastActionAtMs = now; actionCount++;
+         lastAction = String.format(Locale.US, "%s %.3f studs %dms", step.direction, step.studs, durationMs);
+         lastDecision = accepted ? "dispatched:" + patternStep : "dispatch-rejected:" + patternStep;
+@@ -189,6 +263,12 @@
+             o.put("routineLastError", lastError);
+             o.put("movementMsPerStud", c == null ? 0 : c.msPerStud);
+             o.put("movementCalibration", c == null ? "" : "provisional-android");
++            o.put("movementEvidenceMode", c == null ? "" : "roblox-foreground-frame-delta-v1");
++            o.put("visualMovementSamples", visualMovementSamples);
++            o.put("visualMovementConfirmedSamples", visualMovementConfirmedSamples);
++            o.put("lastVisualMovementConfirmed", lastVisualMovementConfirmed);
++            o.put("lastVisualMeanDelta", lastVisualMeanDelta);
++            o.put("lastVisualChangedFraction", lastVisualChangedFraction);
+             o.put("requireRobloxForeground", c != null && c.requireRobloxForeground);
+             RevoAccessibilityService svc = RevoAccessibilityService.get();
+             o.put("activePackage", svc == null ? "" : svc.activePackageName());
+PATCH
+          patch -p1 < /tmp/revo-motion.patch
+          grep -q 'roblox-foreground-frame-delta-v1' "$target"
+          grep -q 'RevoMovementEvidence' "$target"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Repack verified split source
+        if: steps.patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/source-new.zip /tmp/source-new.b64 /tmp/source-verify.zip
+          zip -qr /tmp/source-new.zip revo-android
+          base64 -w0 /tmp/source-new.zip > /tmp/source-new.b64
+          python3 - <<'PY'
+from pathlib import Path
+b = Path('/tmp/source-new.b64').read_text()
+n = len(b)
+for i in range(4):
+    a = n * i // 4
+    z = n * (i + 1) // 4
+    Path(f'.ci/source.part{i:02d}').write_text(b[a:z])
+PY
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source-verify.zip
+          unzip -tq /tmp/source-verify.zip
+          unzip -p /tmp/source-verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -q 'roblox-foreground-frame-delta-v1'
+          unzip -p /tmp/source-verify.zip revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java | grep -q 'RevoMovementEvidence'
+
+      - name: Commit only if live main is unchanged
+        if: steps.patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(cat /tmp/revo-motion-base-sha)"
+          git fetch origin main
+          live="$(git rev-parse origin/main)"
+          if [ "$live" != "$base" ]; then
+            echo "::error::main advanced from $base to $live; refusing stale source write"
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03
+          git diff --cached --check
+          git commit -m 'Verify Roblox visual movement after gather gestures'
+          git push origin HEAD:main
