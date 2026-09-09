@@ -80,7 +80,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            set -euo pipefail
+            set -eu
             mkdir -p emulator-artifacts
             adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
             adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
