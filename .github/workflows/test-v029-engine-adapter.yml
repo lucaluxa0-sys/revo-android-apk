@@ -43,6 +43,8 @@ jobs:
           grep -q 'gather.onFrame(frame);' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'class RevoGatherAdapter' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'roblox-foreground-frame-delta-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'RevoMovementEvidence' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'configureMacro(String json)' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'isRobloxForeground()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           python -m py_compile .ci/enable_revo_accessibility.py
@@ -118,7 +120,7 @@ jobs:
             grep 'RevoGatherAdapter.*action pattern=e_lol' emulator-artifacts/logcat-v029-engine.txt | head -n 5
             grep 'RevoEngineProbe.*state {' emulator-artifacts/logcat-v029-engine.txt | tail -n1 > emulator-artifacts/state.txt
             cat emulator-artifacts/state.txt
-            python -c "import json,re; line=open('emulator-artifacts/state.txt').read(); m=re.search(r'state (\\{.*\\})',line); assert m,line; s=json.loads(m.group(1)); assert s['running'] is True,s; assert s['frameCount']>0,s; assert s['frameWidth']>0 and s['frameHeight']>0,s; assert s['routine']=='gather',s; assert s['patternName']=='e_lol',s; assert s['patternStepCount']==18,s; assert s['actionCount']>=2,s; assert s['lastGestureAccepted'] is True,s; assert s['movementCalibration']=='provisional-android',s; assert s['requireRobloxForeground'] is False,s; print('PASS engine state:',json.dumps(s,sort_keys=True))"
+            python -c "import json,re; line=open('emulator-artifacts/state.txt').read(); m=re.search(r'state (\\{.*\\})',line); assert m,line; s=json.loads(m.group(1)); assert s['running'] is True,s; assert s['frameCount']>0,s; assert s['frameWidth']>0 and s['frameHeight']>0,s; assert s['routine']=='gather',s; assert s['patternName']=='e_lol',s; assert s['patternStepCount']==18,s; assert s['actionCount']>=2,s; assert s['lastGestureAccepted'] is True,s; assert s['movementCalibration']=='provisional-android',s; assert s['movementEvidenceMode']=='roblox-foreground-frame-delta-v1',s; assert s['visualMovementSamples']==0,s; assert s['visualMovementConfirmedSamples']==0,s; assert s['requireRobloxForeground'] is False,s; print('PASS engine state:',json.dumps(s,sort_keys=True))"
       - name: Upload engine evidence
         if: always()
         uses: actions/upload-artifact@v4
