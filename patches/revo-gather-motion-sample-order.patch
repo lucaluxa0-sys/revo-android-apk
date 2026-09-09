@@ -1,0 +1,15 @@
+--- a/revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
++++ b/revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+@@ -242,7 +242,12 @@
+         if (!accepted) lastError = "Accessibility rejected movement gesture for display " + displayId;
+         Log.i("RevoGatherAdapter", "action pattern=" + c.patternName + " step=" + patternStep + "/" + c.steps.size() + " " + lastAction + " accepted=" + accepted + " display=" + displayId);
+         patternStep++;
+-        nextActionAtMs = now + durationMs + c.keyDelayMs;
++        // When proving real Roblox response, do not overwrite the pre-gesture baseline
++        // with a later step before its post-gesture frame can be sampled.
++        long postDelayMs = (accepted && c.requireRobloxForeground && robloxForeground)
++                ? Math.max(100, c.keyDelayMs) : c.keyDelayMs;
++        nextActionAtMs = now + durationMs + postDelayMs;
+     }
+ 
+     void appendState(JSONObject o) {
