@@ -1,0 +1,214 @@
+name: Test Revo Android v0.2.11 Start to Bee Swarm
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0211-start-beeswarm.yml'
+      - 'tools/patch-native-v0211-bee-swarm-launch.py'
+
+permissions:
+  contents: read
+
+jobs:
+  start-to-beeswarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore production Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          grep -q 'Macro engine started after Bee Swarm launch request' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+
+      - name: Restore exact Revolution desktop frontend and Android runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js \
+            .cache/RevolutionMacro.exe \
+            revo-android/app/src/main/assets/www \
+            /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Instrument the real frontend Start button
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('import android.webkit.WebChromeClient;', 'import android.webkit.WebChromeClient;\nimport android.webkit.ConsoleMessage;\nimport android.util.Log;')
+          s = s.replace(
+              'web.setWebChromeClient(new WebChromeClient());',
+              '''WebView.setWebContentsDebuggingEnabled(true);\n        web.setWebChromeClient(new WebChromeClient() {\n            @Override public boolean onConsoleMessage(ConsoleMessage cm) {\n                Log.e("RevoWeb", cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());\n                return true;\n            }\n        });''')
+          needle = 'web.loadUrl("https://revo.local/index.android.html");'
+          insert = '''web.loadUrl("https://revo.local/index.android.html");\n        Handler startGateHandler = new Handler(Looper.getMainLooper());\n        startGateHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||x.textContent||'').trim()==='Disable');if(b)b.click();console.error('RevoStartGateDismiss '+JSON.stringify({clicked:!!b}));return !!b;})()",\n                value -> Log.e("RevoStartGateDismissResult", String.valueOf(value)));\n        }, 14000);\n        startGateHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const buttons=[...document.querySelectorAll('button')];const snapshot=buttons.map(x=>({text:(x.innerText||x.textContent||'').trim(),disabled:!!x.disabled,cls:String(x.className||'')})).filter(x=>x.text);console.error('RevoStartCandidates '+JSON.stringify(snapshot.slice(0,80)));const target=buttons.find(x=>(x.innerText||x.textContent||'').trim()==='Start'&&!x.disabled);if(!target){console.error('RevoStartButtonProbe NOT_FOUND');return 'not-found';}console.error('RevoStartButtonProbe '+JSON.stringify({text:(target.innerText||target.textContent||'').trim(),disabled:!!target.disabled,cls:String(target.className||'')}));target.click();return 'clicked';}catch(e){console.error('RevoStartButtonProbe ERROR '+String(e));return 'error';}})()",\n                value -> Log.e("RevoStartButtonResult", String.valueOf(value)));\n        }, 18500);\n        startGateHandler.postDelayed(() -> {\n            if (web == null) return;\n            web.evaluateJavascript(\n                "(()=>{try{const st=window.RevoAndroidDebug&&window.RevoAndroidDebug.state?window.RevoAndroidDebug.state():null;console.error('RevoStartEngineState '+JSON.stringify(st));return JSON.stringify(st);}catch(e){console.error('RevoStartEngineState ERROR '+String(e));return 'error';}})()",\n                value -> Log.e("RevoStartEngineStateResult", String.valueOf(value)));\n        }, 21500);'''
+          if needle not in s:
+              raise SystemExit('MainActivity loadUrl anchor not found')
+          s = s.replace(needle, insert, 1)
+          p.write_text(s)
+          PY
+
+      - name: Build Revolution diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build CI-only fake Roblox receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fake-roblox/app/src/main/java/com/roblox/client
+          cat > fake-roblox/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "FakeRoblox"
+          include(":app")
+          EOF
+          cat > fake-roblox/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "8.12.2" apply false }
+          EOF
+          cat > fake-roblox/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+              namespace = "com.roblox.client"
+              compileSdk = 36
+              defaultConfig {
+                  applicationId = "com.roblox.client"
+                  minSdk = 30
+                  targetSdk = 36
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+          EOF
+          cat > fake-roblox/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:theme="@style/AppTheme" android:label="Fake Roblox CI">
+              <activity android:name=".MainActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <category android:name="android.intent.category.BROWSABLE" />
+                  <data android:scheme="roblox" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+          mkdir -p fake-roblox/app/src/main/res/values
+          cat > fake-roblox/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar" /></resources>
+          EOF
+          cat > fake-roblox/app/src/main/java/com/roblox/client/MainActivity.java <<'EOF'
+          package com.roblox.client;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.widget.TextView;
+          public class MainActivity extends Activity {
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  String uri = getIntent() == null || getIntent().getData() == null ? "" : getIntent().getData().toString();
+                  Log.e("FakeRoblox", "FAKE_ROBLOX_URI=" + uri);
+                  TextView v = new TextView(this);
+                  v.setText("Fake Roblox CI receiver\\n" + uri);
+                  setContentView(v);
+              }
+          }
+          EOF
+          gradle -p fake-roblox --stacktrace :app:assembleDebug
+          test -s fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Android 15 end-to-end Start gate
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -eu
+            mkdir -p emulator-artifacts
+            adb install -r fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm path com.roblox.client | tee emulator-artifacts/fake-roblox-package.txt
+            adb logcat -c
+            adb shell am force-stop com.revolution.android || true
+            adb shell am force-stop com.roblox.client || true
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-start.txt
+            sleep 25
+            adb exec-out screencap -p > emulator-artifacts/start-beeswarm.png
+            adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
+            adb logcat -d -v time > emulator-artifacts/logcat.txt
+            grep -E 'RevoStart|RevoAndroid|FakeRoblox|android-engine|MACRO|ENGINE' emulator-artifacts/logcat.txt > emulator-artifacts/start-flow.txt || true
+            cat emulator-artifacts/start-flow.txt
+            echo '===== foreground ====='
+            grep -E 'topResumedActivity|mResumedActivity' emulator-artifacts/activities.txt | head -n 10 || true
+
+            grep 'RevoStartButtonProbe' emulator-artifacts/logcat.txt | grep -q '"text":"Start"'
+            grep 'RevoAndroid' emulator-artifacts/logcat.txt | grep -q 'Launching Bee Swarm via roblox://placeId=1537690962 package=com.roblox.client'
+            grep 'FakeRoblox' emulator-artifacts/logcat.txt | grep -q 'FAKE_ROBLOX_URI=roblox://placeId=1537690962'
+            grep 'RevoAndroid' emulator-artifacts/logcat.txt | grep -q 'Macro engine started after Bee Swarm launch request'
+            grep -Eq 'topResumedActivity.*com\.roblox\.client|mResumedActivity.*com\.roblox\.client' emulator-artifacts/activities.txt
+            echo 'PASS: real Revolution Start button launched Bee Swarm URI and started MacroEngine on Android 15'
+
+      - name: Upload end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0211-start-beeswarm-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
