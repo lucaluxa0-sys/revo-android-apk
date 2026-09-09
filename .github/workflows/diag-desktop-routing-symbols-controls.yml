@@ -17,10 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download exact pinned desktop Revolution
+      - name: Restore archived Android source and exact pinned desktop Revolution
         shell: bash
         run: |
           set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -f revo-android/extract_revo_frontend.py
           mkdir -p .cache /tmp/revo-www
           curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
@@ -34,7 +37,6 @@ jobs:
           import re
           js = next(Path('/tmp/revo-www').rglob('index-*.js'))
           text = js.read_text(errors='replace')
-          # Prefer snippets that contain a real Macro Start call and button-ish nearby UI.
           hits=[]
           for m in re.finditer(r'Jo\(', text):
               a=max(0,m.start()-2500); b=min(len(text),m.end()+3500)
@@ -47,11 +49,10 @@ jobs:
           for score,pos,s in hits:
               print(f'===== candidate score={score} pos={pos} =====')
               print(s.replace('\n',' '))
-          # Also locate Mantine dot loaders/menus near those candidates.
           for term in ['type:"dots"','type:\"dots\"','children:e.jsx(no','children:e.jsx(gr']:
               print(f'===== {term} =====')
-              for m in list(re.finditer(re.escape(term), text))[:30]:
-                  a=max(0,m.start()-1200); b=min(len(text),m.end()+1200)
+              for m in list(re.finditer(re.escape(term), text))[:60]:
+                  a=max(0,m.start()-1600); b=min(len(text),m.end()+1600)
                   s=text[a:b]
                   if 'Start' in s or 'Pause' in s or 'Stop' in s or 'Macro' in s:
                       print(s.replace('\n',' '))
