@@ -29,26 +29,39 @@ jobs:
           if ($sha -ne '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb') { throw "SHA mismatch: $sha" }
           Write-Host "PASS exact EXE $sha"
 
-      - name: Launch Revo and wait for its real runtime dataset
+      - name: Launch Revo and wait for fully initialized runtime data
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $work = Join-Path $env:RUNNER_TEMP 'revo-runtime-probe'
           $exe = Join-Path $work 'RevolutionMacro.exe'
           $settings = Join-Path $work 'settings\settings.yaml'
+          $state = Join-Path $work 'settings\state.yaml'
+          $planters = Join-Path $work 'settings\planters.yaml'
           $patterns = Join-Path $work 'patterns\patterns.bin'
           $p = Start-Process -FilePath $exe -WorkingDirectory $work -PassThru
           Write-Host "Started PID=$($p.Id) WorkingDirectory=$work"
+
+          $ready = $false
           for ($i = 0; $i -lt 45; $i++) {
-            if ((Test-Path $settings) -and (Test-Path $patterns)) { break }
             Start-Sleep -Seconds 2
             try { $p.Refresh() } catch {}
-            if ($p.HasExited) { throw "RevolutionMacro exited before runtime data appeared. ExitCode=$($p.ExitCode)" }
+            if ($p.HasExited) { throw "RevolutionMacro exited before runtime data initialized. ExitCode=$($p.ExitCode)" }
+
+            $settingsBytes = if (Test-Path $settings) { (Get-Item $settings).Length } else { 0 }
+            $stateBytes = if (Test-Path $state) { (Get-Item $state).Length } else { 0 }
+            $plantersBytes = if (Test-Path $planters) { (Get-Item $planters).Length } else { 0 }
+            $patternsBytes = if (Test-Path $patterns) { (Get-Item $patterns).Length } else { 0 }
+            Write-Host "Probe $((($i + 1) * 2))s settings=$settingsBytes state=$stateBytes planters=$plantersBytes patterns=$patternsBytes"
+
+            if ($settingsBytes -gt 10000 -and $stateBytes -gt 100 -and $plantersBytes -gt 1000 -and $patternsBytes -gt 100000) {
+              $ready = $true
+              break
+            }
           }
-          if (!(Test-Path $settings)) { throw "Missing exact runtime settings file: $settings" }
-          if (!(Test-Path $patterns)) { throw "Missing exact runtime pattern dataset: $patterns" }
-          Write-Host "PASS runtime settings=$settings bytes=$((Get-Item $settings).Length)"
-          Write-Host "PASS runtime patterns=$patterns bytes=$((Get-Item $patterns).Length)"
+          if (-not $ready) { throw 'Revolution runtime files never reached initialized sizes' }
+          Start-Sleep -Seconds 2
+          Write-Host "PASS initialized settings=$((Get-Item $settings).Length) state=$((Get-Item $state).Length) planters=$((Get-Item $planters).Length) patterns=$((Get-Item $patterns).Length)"
 
       - name: Capture exact runtime files and hashes
         shell: pwsh
