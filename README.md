@@ -4,18 +4,20 @@ Public download repository for the Revo Android + multi-session developer build.
 
 ## Latest download
 
-[Download RevolutionMacro-Android-v0.2.10-Samsung-Test.apk](https://raw.githubusercontent.com/lucaluxa0-sys/revo-android-apk/main/RevolutionMacro-Android-v0.2.10-Samsung-Test.apk)
+[Download RevolutionMacro-Android-v0.2.11-Samsung-Test.apk](https://raw.githubusercontent.com/lucaluxa0-sys/revo-android-apk/main/RevolutionMacro-Android-v0.2.11-Samsung-Test.apk)
 
 SHA-256:
 
-`711d1e7bbac26bbc253fed119d38307abce684ac1ac982df5a2017a5b8e00cb2`
+`e2acbb3ad45e0dafaf00817c11680c182903a82506ffb3ef227f36eb8b617242`
 
-Build provenance: [BUILD_PROVENANCE-v0210-samsung-test.txt](BUILD_PROVENANCE-v0210-samsung-test.txt)
+Build provenance: [BUILD_PROVENANCE-v0211-samsung-test.txt](BUILD_PROVENANCE-v0211-samsung-test.txt)
 
-v0.2.10 fixes the Android Gather pattern selector by restoring the real Revolution pattern catalog into `state.config.availablePatterns`. The Android 15 / API 35 Pixel 6 emulator regression gate cold-started the app, opened the real Gather row and Pattern control, and verified all 15 recovered pattern options are visible, including `e_lol`, `CornerXSnake`, and `BambooAlt`.
+v0.2.11 fixes the Android Start handoff that previously opened generic Roblox and stopped there. Start now launches Bee Swarm Simulator directly with `roblox://placeId=1537690962`, and the native macro engine starts only after that launch request succeeds.
 
-Selector evidence: [GitHub Actions run 34411501626](https://github.com/lucaluxa0-sys/revo-android-apk/actions/runs/34411501626)
+The Android 15 / API 35 Pixel 6 end-to-end gate exercised the real Revolution Start button with an active `e_lol` Gather row, enabled the real Revolution Accessibility service, verified the Bee Swarm Roblox URI, ran the recovered 18-step `e_lol` adapter, injected foreground movement, and required Revolution's visual movement detector to confirm a visible response.
 
-This build still contains the real desktop frontend, Android runtime compatibility, recovered assets, native capture/input plumbing, and the narrow recovered Gather execution adapter. The full desktop Revolution decision/routine engine is still under active recovery and is not complete.
+End-to-end evidence: [GitHub Actions run 34416809503](https://github.com/lucaluxa0-sys/revo-android-apk/actions/runs/34416809503)
+
+v0.2.10's Gather selector repair remains included, so the real Pattern control still exposes the recovered Revolution pattern catalog. `e_lol` is currently the pattern with the narrow recovered native execution adapter. The full desktop Revolution decision/routine engine and generic execution for the other recovered Gather patterns are still under active recovery and are not complete.
 
 Older developer APKs remain in this repository for reference.
