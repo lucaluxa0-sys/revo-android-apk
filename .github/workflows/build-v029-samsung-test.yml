@@ -21,7 +21,7 @@ on:
       - 'tools/recover-vite-pngs.js'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-samsung-test-apk:
@@ -128,3 +128,19 @@ jobs:
             SHA256SUMS-v029-samsung-test.txt
             BUILD_PROVENANCE-v029-samsung-test.txt
           if-no-files-found: error
+
+      - name: Publish Samsung test APK into repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add RevolutionMacro-Android-v0.2.9-Samsung-Test.apk \
+                  SHA256SUMS-v029-samsung-test.txt \
+                  BUILD_PROVENANCE-v029-samsung-test.txt
+          if git diff --cached --quiet; then
+            echo 'Repository already contains this exact Samsung test build.'
+            exit 0
+          fi
+          git commit -m 'Publish Revolution Android v0.2.9 Samsung test APK [skip ci]'
+          git push origin HEAD:main
