@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os
+import base64
 import re
 import subprocess
 import time
@@ -8,6 +8,7 @@ from pathlib import Path
 
 PACKAGE = "com.revolution.android"
 SERVICE_CLASS = "com.revolution.android.RevoAccessibilityService"
+SERVICE_COMPONENT = f"{PACKAGE}/{SERVICE_CLASS}"
 ARTIFACT_DIR = Path("emulator-artifacts")
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,26 +37,115 @@ def safe_name(value):
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "stage"
 
 
+def wake_and_unlock():
+    for args in (
+        ("input", "keyevent", "KEYCODE_WAKEUP"),
+        ("wm", "dismiss-keyguard"),
+        ("input", "keyevent", "82"),
+    ):
+        result = shell(*args, check=False)
+        if result.stdout:
+            print(result.stdout, flush=True)
+    time.sleep(0.4)
+
+
+def take_screenshot(path):
+    with path.open("wb") as fh:
+        proc = subprocess.run(["adb", "exec-out", "screencap", "-p"], stdout=fh)
+    if proc.returncode != 0:
+        raise RuntimeError(f"screencap failed for {path}: {proc.returncode}")
+
+
+def print_filtered(title, output, patterns=None, max_lines=160):
+    print(f"===== {title} =====", flush=True)
+    lines = (output or "").splitlines()
+    if patterns:
+        regexes = [re.compile(p, re.I) for p in patterns]
+        selected = [line for line in lines if any(rx.search(line) for rx in regexes)]
+        if selected:
+            lines = selected
+    for line in lines[:max_lines]:
+        print(line, flush=True)
+    if len(lines) > max_lines:
+        print(f"... ({len(lines) - max_lines} more lines)", flush=True)
+
+
+def print_failure_diagnostics(stage, png_path):
+    window = shell("dumpsys", "window", check=False).stdout
+    print_filtered(
+        f"WINDOW FOCUS {stage}",
+        window,
+        [r"mCurrentFocus", r"mFocusedApp", r"mObscuringWindow", r"mTopFocusedDisplayId"],
+    )
+
+    activities = shell("dumpsys", "activity", "activities", check=False).stdout
+    print_filtered(
+        f"RESUMED ACTIVITIES {stage}",
+        activities,
+        [r"mResumedActivity", r"topResumedActivity", r"ResumedActivity", r"Task\{"],
+        max_lines=120,
+    )
+
+    top = shell("dumpsys", "activity", "top", check=False).stdout
+    print_filtered(
+        f"ACTIVITY TOP {stage}",
+        top,
+        [r"ACTIVITY", r"mResumed", r"mStopped", r"mCurrentFocus", r"settings"],
+        max_lines=120,
+    )
+
+    a11y_help = shell("cmd", "accessibility", "help", check=False).stdout
+    print_filtered(f"CMD ACCESSIBILITY HELP {stage}", a11y_help, max_lines=160)
+
+    if png_path.exists():
+        encoded = base64.b64encode(png_path.read_bytes()).decode("ascii")
+        print(f"REVO_SCREENSHOT_BASE64_STAGE={stage}", flush=True)
+        print(f"REVO_SCREENSHOT_BASE64={encoded}", flush=True)
+
+
 def capture(stage):
     stage = safe_name(stage)
     remote = "/sdcard/revo-a11y.xml"
     xml_path = ARTIFACT_DIR / f"a11y-{stage}.xml"
     png_path = ARTIFACT_DIR / f"a11y-{stage}.png"
 
-    dump = shell("uiautomator", "dump", remote, check=False)
-    if dump.stdout:
-        print(dump.stdout, flush=True)
-    pulled = adb("pull", remote, str(xml_path), check=False)
-    if pulled.stdout:
-        print(pulled.stdout, flush=True)
-    with png_path.open("wb") as fh:
-        proc = subprocess.run(["adb", "exec-out", "screencap", "-p"], stdout=fh)
-        if proc.returncode != 0:
-            raise RuntimeError(f"screencap failed at {stage}: {proc.returncode}")
+    if xml_path.exists():
+        xml_path.unlink()
 
-    if not xml_path.exists():
-        raise RuntimeError(f"UI hierarchy missing at {stage}")
-    return ET.parse(xml_path).getroot()
+    last_output = ""
+    for retry in range(5):
+        wake_and_unlock()
+        shell("rm", "-f", remote, check=False)
+
+        attempts = (
+            ("uiautomator", "dump", "--compressed", remote),
+            ("uiautomator", "dump", remote),
+        )
+        for command in attempts:
+            dump = shell(*command, check=False)
+            last_output = dump.stdout or ""
+            if last_output:
+                print(f"UI DUMP retry={retry} command={' '.join(command)}", flush=True)
+                print(last_output, flush=True)
+
+            pulled = adb("pull", remote, str(xml_path), check=False)
+            if pulled.stdout:
+                print(pulled.stdout, flush=True)
+            if xml_path.exists() and xml_path.stat().st_size > 20:
+                try:
+                    root = ET.parse(xml_path).getroot()
+                    take_screenshot(png_path)
+                    return root
+                except ET.ParseError as exc:
+                    print(f"Invalid UI hierarchy retry={retry}: {exc}", flush=True)
+                    xml_path.unlink(missing_ok=True)
+
+        time.sleep(0.8 + retry * 0.2)
+
+    take_screenshot(png_path)
+    print(f"UI hierarchy still missing after retries at {stage}: {last_output!r}", flush=True)
+    print_failure_diagnostics(stage, png_path)
+    raise RuntimeError(f"UI hierarchy missing at {stage}")
 
 
 def parent_map(root):
@@ -153,10 +243,35 @@ def dump_visible_labels(root):
         print("  ", value, flush=True)
 
 
+def open_service_settings():
+    wake_and_unlock()
+    print("Opening Revolution Accessibility service detail page", flush=True)
+    detail = shell(
+        "am",
+        "start",
+        "-a",
+        "android.settings.ACCESSIBILITY_DETAILS_SETTINGS",
+        "--es",
+        "android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME",
+        SERVICE_COMPONENT,
+        check=False,
+    )
+    output = detail.stdout or ""
+    if output:
+        print(output, flush=True)
+
+    if detail.returncode != 0 or "Error:" in output or "unable to resolve" in output.lower():
+        print("Accessibility detail deep-link unavailable; falling back to general Accessibility Settings", flush=True)
+        fallback = shell("am", "start", "-a", "android.settings.ACCESSIBILITY_SETTINGS", check=False)
+        if fallback.stdout:
+            print(fallback.stdout, flush=True)
+    time.sleep(1.8)
+
+
 def main():
-    print("Opening Android Accessibility Settings", flush=True)
-    shell("am", "start", "-a", "android.settings.ACCESSIBILITY_SETTINGS")
-    time.sleep(1.5)
+    help_output = shell("cmd", "accessibility", "help", check=False).stdout
+    print_filtered("CMD ACCESSIBILITY HELP INITIAL", help_output, max_lines=160)
+    open_service_settings()
 
     for attempt in range(16):
         if enabled_state():
@@ -193,7 +308,7 @@ def main():
                 click(switch, parents, "service switch")
                 continue
 
-        # Pixel/Android 15 usually places third-party services under Downloaded apps.
+        # Pixel/Android 15 may place third-party services under Downloaded apps.
         node = find_by_text(root, ["downloaded apps", "installed apps"], exact=True)
         if node is not None:
             click(node, parents, "third-party accessibility apps")
@@ -204,8 +319,6 @@ def main():
             click(node, parents, "Revolution accessibility service")
             continue
 
-        # Some Settings builds expose a search affordance; fail with evidence rather than
-        # blindly tapping coordinates if the expected path is not represented in the tree.
         print(f"No known Accessibility UI target on attempt {attempt}", flush=True)
         time.sleep(0.8)
 
