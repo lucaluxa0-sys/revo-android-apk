@@ -1,0 +1,36 @@
+name: Diagnose Android Start to Roblox flow
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-start-roblox-flow.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-start-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore current native source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -d revo-android/app/src/main/java/com/revolution/android
+      - name: Trace Start and Roblox launch implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT='revo-android/app/src/main/java/com/revolution/android'
+          echo '===== STARTING REVOLUTION STRING ====='
+          grep -Rni -C 12 --include='*.java' 'Starting Revolution' "$ROOT" || true
+          echo '===== ROBLOX PACKAGE / URI / LAUNCH ====='
+          grep -Rni -C 15 --include='*.java' -E 'com\.roblox\.client|roblox://|roblox-player:|getLaunchIntentForPackage|startActivity|ACTION_VIEW|placeId|place[Ii][Dd]|1537690962' "$ROOT" || true
+          echo '===== START-LIKE METHODS ====='
+          grep -Rni -C 8 --include='*.java' -E 'startMacro|StartMacro|startRevolution|StartRevolution|launchRoblox|LaunchRoblox|startEngine|configureMacro|MacroEngineRegistry' "$ROOT" || true
