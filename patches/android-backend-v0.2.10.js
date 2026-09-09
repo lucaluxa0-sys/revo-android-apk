@@ -91,8 +91,7 @@
   }
 
   function install() {
-    const rt = runtime();
-    if (!rt) {
+    if (!runtime()) {
       setTimeout(install, 25);
       return;
     }
@@ -101,22 +100,14 @@
 
     const attempt = (label) => {
       pinDebugVersion();
-      if (!rt.preloaded) {
-        console.log(`[android-patterns] ${label}: waiting for preload`);
-        return false;
-      }
       return repairAvailablePatterns(label);
     };
 
-    // Preload normally completes shortly after dataRuntime becomes visible.
-    // Retry across the existing delayed v0.2.8/v0.2.9 repair windows so this
-    // overlay remains authoritative without replacing any desktop-provided data.
-    const retryUntilReady = (tries = 0) => {
-      if (attempt(`preload-${tries}`)) return;
-      if (tries < 240) setTimeout(() => retryUntilReady(tries + 1), 50);
-    };
-    retryUntilReady();
-
+    // The Android preload batch does not write state.config.availablePatterns,
+    // so it is safe to seed as soon as dataRuntime exists. Repeat after the
+    // existing delayed backend repairs in case another startup path recreates it.
+    attempt('runtime-ready');
+    setTimeout(() => attempt('postload-250ms'), 250);
     setTimeout(() => attempt('postload-1s'), 1000);
     setTimeout(() => attempt('postload-3.5s'), 3500);
     setTimeout(() => attempt('postload-5.5s'), 5500);
