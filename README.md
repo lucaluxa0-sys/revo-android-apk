@@ -2,14 +2,16 @@
 
 Public download repository for the Revo Android + multi-session developer build.
 
-## Download
+## Latest download
 
-[Download RevolutionMacro-Android-v0.2.3-dev.apk](https://raw.githubusercontent.com/lucaluxa0-sys/revo-android-apk/main/RevolutionMacro-Android-v0.2.3-dev.apk)
+[Download RevolutionMacro-Android-v0.2.9-Samsung-Test.apk](https://raw.githubusercontent.com/lucaluxa0-sys/revo-android-apk/main/RevolutionMacro-Android-v0.2.9-Samsung-Test.apk)
 
 SHA-256:
 
-`a01f15ec18d7fe06ac4d67876d7993a7cb9db1b8f357a79dd47d5c969f0df2cd`
+`6fc04c62d5b474e6b18ff88f1b7bdfc1e06434f7e0732becef1f5f556d4f5af7`
 
-v0.2.3 fixes the Android startup/runtime handshake that caused v0.2.2 to remain on “Starting Revolution Macro…”. The fix has been boot-tested in an Android 15 Pixel 6 emulator and the actual Revolution UI reached its interactive first-run screen.
+Build provenance: [BUILD_PROVENANCE-v029-samsung-test.txt](BUILD_PROVENANCE-v029-samsung-test.txt)
 
-This is still a developer build: the full current Revolution macro/AI backend and Samsung multi-session layer are not complete yet.
+This v0.2.9 Samsung-test build contains the current Android frontend/runtime and the narrow recovered Gather execution adapter. The current Android 15 emulator gates have proven the native capture/input path and controlled Gather movement execution, but the full desktop Revolution decision/routine engine is still incomplete.
+
+Older developer APKs remain in this repository for reference.
