@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/diag-v029-runtime-gather-state.yml
       - tools/instrument-v029-gather-state.py
+      - patches/android-backend-v0.2.9.js
 
 permissions:
   contents: read
@@ -51,7 +52,15 @@ jobs:
           cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
           JS=$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)
           python3 tools/patch-revo-frontend-v028.py "$JS"
-          cat patches/android-wails-shim-v0.2.4.js patches/android-backend-v0.2.5.js patches/android-backend-v0.2.6.js patches/android-backend-v0.2.8.js patches/android-backend-v0.2.8.1.js > revo-android/app/src/main/assets/www/android-wails-shim.js
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.9.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q '__revoAndroidV029Installed' revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q 'AndroidRevo.configureMacro' revo-android/app/src/main/assets/www/android-wails-shim.js
           python3 tools/instrument-v029-gather-state.py revo-android/app/src/main/java/com/revolution/android/MainActivity.java
           gradle -p revo-android --stacktrace :app:assembleDebug
 
@@ -85,6 +94,8 @@ jobs:
             cat emulator-artifacts/gather-state.txt
             test -s emulator-artifacts/gather-state.txt
             grep -q '"runtimeDisconnected":false' emulator-artifacts/gather-state.txt
+            grep -q '"backend":"0.2.9"' emulator-artifacts/gather-state.txt
+            grep -q '\[android-backend\] v0.2.9 gather engine bridge installed' emulator-artifacts/logcat-v029-gather-state.txt
 
       - name: Upload evidence
         if: always()
