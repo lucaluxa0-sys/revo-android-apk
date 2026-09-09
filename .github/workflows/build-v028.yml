@@ -76,8 +76,8 @@ jobs:
           python3 tools/patch-revo-frontend-v028.py "$JS"
           grep -q 'data-revo-help-popup' "$JS"
           grep -q 'title:"Auto-Planters"' "$JS"
-          grep -q 'aria-label:"Open Auto-Planters"' "$JS"
-          grep -q 'aria-label:"Close Auto-Planters"' "$JS"
+          grep -q '"aria-label":"Open Auto-Planters"' "$JS"
+          grep -q '"aria-label":"Close Auto-Planters"' "$JS"
 
       - name: Install real Revolution launcher icon
         shell: bash
@@ -115,7 +115,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import json, textwrap
+          import json
 
           p=Path('revo-android/app/src/main/java/com/revolution/android/MainActivity.java')
           s=p.read_text()
