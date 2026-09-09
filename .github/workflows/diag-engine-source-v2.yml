@@ -39,3 +39,9 @@ jobs:
           grep -n -C 4 -E 'accessibility|service|projection|foregroundService' revo-android/app/src/main/AndroidManifest.xml || true
           echo '===== build deps ====='
           cat revo-android/app/build.gradle.kts
+      - name: Upload reconstructed Android source
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconstructed-revo-android-source
+          path: revo-android/
+          if-no-files-found: error
