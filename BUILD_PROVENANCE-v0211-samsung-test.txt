@@ -1,0 +1,7 @@
+repo=lucaluxa0-sys/revo-android-apk
+commit=6199802b9fca54d63c52870728e58da65b5d994a
+desktop_release=nosyliam/revolution-macro v0.9c-hotfix3
+desktop_sha256=0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb
+fix=direct Bee Swarm launch plus post-launch engine handoff; e_lol end-to-end Android 15 gate
+e2e_validation_run=34416809503
+e2e_validation_commit=da1cc5838618b55f5b9ca15470c056dd70c2d129
