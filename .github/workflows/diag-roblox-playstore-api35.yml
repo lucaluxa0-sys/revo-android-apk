@@ -1,0 +1,101 @@
+name: Diagnose official Roblox Play Store path on API 35
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-roblox-playstore-api35.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  roblox-playstore-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+      - name: Boot Play Store Android 15 and inspect official Roblox listing
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -u
+            mkdir -p roblox-playstore-artifacts
+            adb shell getprop ro.build.version.release > roblox-playstore-artifacts/android-version.txt
+            adb shell getprop ro.product.cpu.abi > roblox-playstore-artifacts/abi.txt
+            adb shell pm path com.android.vending > roblox-playstore-artifacts/playstore-package.txt
+            cat roblox-playstore-artifacts/playstore-package.txt
+            grep -q '^package:' roblox-playstore-artifacts/playstore-package.txt
+
+            adb shell am force-stop com.android.vending || true
+            adb shell am start -W -a android.intent.action.VIEW -d 'market://details?id=com.roblox.client' com.android.vending > roblox-playstore-artifacts/market-start.txt 2>&1 || true
+            sleep 12
+            adb exec-out screencap -p > roblox-playstore-artifacts/playstore-roblox-00.png
+            adb shell uiautomator dump /sdcard/roblox-store.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/roblox-store.xml roblox-playstore-artifacts/playstore-roblox-00.xml >/dev/null 2>&1 || true
+
+            python3 - <<'PY'
+            from pathlib import Path
+            import re, xml.etree.ElementTree as ET
+            p=Path('roblox-playstore-artifacts/playstore-roblox-00.xml')
+            texts=[]
+            install=None
+            if p.exists():
+                root=ET.parse(p).getroot()
+                for n in root.iter('node'):
+                    vals=[n.attrib.get('text',''),n.attrib.get('content-desc','')]
+                    for v in vals:
+                        if v and v not in texts: texts.append(v)
+                    label=' '.join(vals).lower()
+                    if install is None and ('install' in label or 'update' in label):
+                        m=re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.attrib.get('bounds',''))
+                        if m:
+                            x1,y1,x2,y2=map(int,m.groups())
+                            install=((x1+x2)//2,(y1+y2)//2)
+            Path('roblox-playstore-artifacts/ui-text.txt').write_text('\n'.join(texts))
+            Path('roblox-playstore-artifacts/install-coord.txt').write_text('' if install is None else f'{install[0]} {install[1]}')
+            print('\n'.join(texts[:120]))
+            print('install-coordinate:', install)
+            PY
+
+            if [ -s roblox-playstore-artifacts/install-coord.txt ]; then
+              read x y < roblox-playstore-artifacts/install-coord.txt
+              adb shell input tap "$x" "$y"
+              sleep 25
+            fi
+
+            adb exec-out screencap -p > roblox-playstore-artifacts/playstore-roblox-01.png
+            adb shell uiautomator dump /sdcard/roblox-store-after.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/roblox-store-after.xml roblox-playstore-artifacts/playstore-roblox-01.xml >/dev/null 2>&1 || true
+            adb shell pm path com.roblox.client > roblox-playstore-artifacts/roblox-package.txt 2>&1 || true
+            adb shell dumpsys window windows > roblox-playstore-artifacts/windows.txt 2>&1 || true
+            adb logcat -d -v time > roblox-playstore-artifacts/logcat.txt 2>&1 || true
+
+            if grep -q '^package:' roblox-playstore-artifacts/roblox-package.txt; then
+              echo 'ROBLOX_INSTALLED=true' | tee roblox-playstore-artifacts/result.txt
+            else
+              echo 'ROBLOX_INSTALLED=false' | tee roblox-playstore-artifacts/result.txt
+              echo 'Visible UI:' >> roblox-playstore-artifacts/result.txt
+              cat roblox-playstore-artifacts/ui-text.txt >> roblox-playstore-artifacts/result.txt
+            fi
+            cat roblox-playstore-artifacts/result.txt
+      - name: Upload Play Store preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roblox-official-playstore-api35-preflight
+          path: roblox-playstore-artifacts/
+          if-no-files-found: warn
