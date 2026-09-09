@@ -56,7 +56,7 @@ jobs:
           repl='''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {\n            autostartWhenReady(0);\n        }\n        if (getIntent() != null && getIntent().getBooleanExtra("engineProbe", false)) {\n            engineProbeWhenReady(0);\n        }'''
           if marker not in s: raise SystemExit('onCreate marker missing')
           s=s.replace(marker,repl,1)
-          insert='''\n    private void engineProbeWhenReady(int attempt) {\n        if (isFinishing()) return;\n        if (RevoAccessibilityService.get() != null) {\n            String cfg = "{\\\"routine\\\":\\\"gather\\\",\\\"account\\\":\\\"Probe\\\",\\\"patternName\\\":\\\"e_lol\\\",\\\"width\\\":2,\\\"length\\\":8,\\\"msPerStud\\\":1,\\\"keyDelayMs\\\":1,\\\"requireRobloxForeground\\\":false}";\n            Log.e("RevoEngineProbe", "configured " + bridge.configureMacro(cfg));\n            bridge.startMacro("Probe");\n            new Handler(Looper.getMainLooper()).postDelayed(() ->\n                Log.e("RevoEngineProbe", "state " + bridge.getEngineState()), 3000);\n            return;\n        }\n        if (attempt >= 40) {\n            Log.e("RevoEngineProbe", "ERROR accessibility never connected");\n            return;\n        }\n        new Handler(Looper.getMainLooper()).postDelayed(() -> engineProbeWhenReady(attempt + 1), 250);\n    }\n'''
+          insert='''\n    private void engineProbeWhenReady(int attempt) {\n        if (isFinishing()) return;\n        if (RevoAccessibilityService.get() != null) {\n            String cfg = "{\\\"routine\\\":\\\"gather\\\",\\\"account\\\":\\\"Probe\\\",\\\"patternName\\\":\\\"e_lol\\\",\\\"width\\\":2,\\\"length\\\":8,\\\"msPerStud\\\":1,\\\"keyDelayMs\\\":1,\\\"requireRobloxForeground\\\":false}";\n            Log.e("RevoEngineProbe", "configured " + bridge.configureMacro(cfg));\n            bridge.startMacro("Probe");\n            new Handler(Looper.getMainLooper()).postDelayed(() ->\n                Log.e("RevoEngineProbe", "state " + bridge.getEngineState()), 3000);\n            return;\n        }\n        if (attempt >= 120) {\n            Log.e("RevoEngineProbe", "ERROR accessibility never connected");\n            return;\n        }\n        new Handler(Looper.getMainLooper()).postDelayed(() -> engineProbeWhenReady(attempt + 1), 250);\n    }\n'''
           stop_marker='''    // Deliberately DO NOT stop MacroEngine here.'''
           if stop_marker not in s: raise SystemExit('class insertion marker missing')
           s=s.replace(stop_marker, insert+'\n'+stop_marker,1)
@@ -89,11 +89,18 @@ jobs:
             adb shell cmd appops get com.revolution.android ACCESS_RESTRICTED_SETTINGS > emulator-artifacts/restricted-appop.txt
             cat emulator-artifacts/restricted-appop.txt
             grep -qi 'allow' emulator-artifacts/restricted-appop.txt
-            adb shell settings put secure enabled_accessibility_services com.revolution.android/.RevoAccessibilityService
-            adb shell settings put secure accessibility_enabled 1
             adb logcat -c
             adb shell am start -W -n com.revolution.android/.MainActivity --ez engineProbe true
-            sh -c 'i=0; while [ "$i" -lt 30 ]; do adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt; if grep -Fq "com.revolution.android/.RevoAccessibilityService" emulator-artifacts/accessibility.txt; then exit 0; fi; i=$((i+1)); sleep 1; done; cat emulator-artifacts/accessibility.txt; exit 1'
+            adb shell settings put secure enabled_accessibility_services com.revolution.android/com.revolution.android.RevoAccessibilityService
+            adb shell settings put secure accessibility_enabled 1
+            adb shell settings get secure enabled_accessibility_services > emulator-artifacts/enabled-setting.txt
+            adb shell settings get secure accessibility_enabled > emulator-artifacts/accessibility-enabled.txt
+            cat emulator-artifacts/enabled-setting.txt
+            cat emulator-artifacts/accessibility-enabled.txt
+            grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
+            grep -Fxq '1' emulator-artifacts/accessibility-enabled.txt
+            adb shell dumpsys package com.revolution.android > emulator-artifacts/package.txt
+            sh -c 'i=0; while [ "$i" -lt 30 ]; do adb shell dumpsys accessibility > emulator-artifacts/accessibility.txt; if grep -Fq "RevoAccessibilityService" emulator-artifacts/accessibility.txt; then exit 0; fi; i=$((i+1)); sleep 1; done; adb logcat -d -v time > emulator-artifacts/logcat-v029-engine.txt; cat emulator-artifacts/accessibility.txt; exit 1'
             cat emulator-artifacts/accessibility.txt
             sleep 8
             adb exec-out screencap -p > emulator-artifacts/revo-v029-engine.png
