@@ -14,7 +14,12 @@ start_pat = re.compile(
 )
 start_repl = '''@JavascriptInterface public boolean startMacroAndRoblox(String account) {
         boolean launched = launchRoblox();
-        if (launched) engine().start();
+        if (launched) {
+            engine().start();
+            android.util.Log.i("RevoAndroid", "Macro engine started after Bee Swarm launch request; account=" + String.valueOf(account));
+        } else {
+            android.util.Log.e("RevoAndroid", "Macro engine not started because Roblox/Bee Swarm launch failed; account=" + String.valueOf(account));
+        }
         return launched;
     }'''
 s, n = start_pat.subn(start_repl, s)
@@ -58,8 +63,10 @@ if n != 1:
 
 if 'roblox://placeId=1537690962' not in s:
     raise SystemExit('Bee Swarm URI missing after patch')
+if 'Macro engine started after Bee Swarm launch request' not in s:
+    raise SystemExit('engine handoff log missing after patch')
 if 'getLaunchIntentForPackage(pkg);' not in s:
     raise SystemExit('package presence probe unexpectedly missing')
 
 p.write_text(s)
-print('PASS: patched AndroidRevoBridge Start -> Bee Swarm direct deep link')
+print('PASS: patched AndroidRevoBridge Start -> Bee Swarm direct deep link + engine handoff')
