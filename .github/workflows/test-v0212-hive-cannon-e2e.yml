@@ -1,0 +1,298 @@
+name: Test Revo Android v0.2.12 hive to cannon end to end
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0212-hive-cannon-e2e.yml'
+      - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0211-bee-swarm-launch.py'
+      - 'tools/instrument-v0211-elol-e2e.py'
+      - 'third_party/revolution-2025-gpl/macro/routines/hive/**'
+      - 'third_party/revolution-2025-gpl/bitmaps/hive/**'
+      - 'third_party/revolution-2025-gpl/bitmaps/interact/press_e.png'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+
+permissions:
+  contents: read
+
+jobs:
+  hive-cannon-real-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore production source and apply v0.2.11 plus v0.2.12 native patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/instrument-v0211-elol-e2e.py
+          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/instrument-v0211-elol-e2e.py
+          grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'desktop GotoCannon: Forward 12' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'desktop GotoCannon: Right 37 slot' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'joystickWithDoubleTap' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          test -s revo-android/app/src/main/assets/revo-routing/claimhive.png
+          test -s revo-android/app/src/main/assets/revo-routing/press_e.png
+
+      - name: Restore exact desktop frontend and Android overlays
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Build Revolution hive-routing APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build hive-reactive CI Roblox receiver with recovered Revolution templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fake-roblox/app/src/main/java/com/roblox/client fake-roblox/app/src/main/res/values fake-roblox/app/src/main/res/drawable-nodpi
+          cp third_party/revolution-2025-gpl/bitmaps/hive/claimhive.png fake-roblox/app/src/main/res/drawable-nodpi/claimhive.png
+          cp third_party/revolution-2025-gpl/bitmaps/interact/press_e.png fake-roblox/app/src/main/res/drawable-nodpi/press_e.png
+          cat > fake-roblox/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "FakeRobloxHiveRoute"
+          include(":app")
+          EOF
+          cat > fake-roblox/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "8.12.2" apply false }
+          EOF
+          cat > fake-roblox/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+              namespace = "com.roblox.client"
+              compileSdk = 36
+              defaultConfig {
+                  applicationId = "com.roblox.client"
+                  minSdk = 30
+                  targetSdk = 36
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+          EOF
+          cat > fake-roblox/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowFullscreen">true</item></style></resources>
+          EOF
+          cat > fake-roblox/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:theme="@style/AppTheme" android:label="Fake Roblox Hive Route CI">
+              <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <category android:name="android.intent.category.BROWSABLE" />
+                  <data android:scheme="roblox" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+          cat > fake-roblox/app/src/main/java/com/roblox/client/MainActivity.java <<'EOF'
+          package com.roblox.client;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.view.MotionEvent;
+          import android.view.View;
+
+          public class MainActivity extends Activity {
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  String uri = getIntent() == null || getIntent().getData() == null ? "" : getIntent().getData().toString();
+                  Log.e("FakeRobloxHive", "FAKE_ROBLOX_URI=" + uri);
+                  setContentView(new HiveView(this));
+              }
+              static final class HiveView extends View {
+                  private final Paint paint = new Paint();
+                  private final Bitmap claim;
+                  private final Bitmap pressE;
+                  private boolean hiveVisible = false;
+                  private boolean claimed = false;
+                  private int gestureUps = 0;
+                  private int downs = 0;
+                  private final int claimX = 570, claimY = 320;
+                  private final int cannonX = 720, cannonY = 390;
+                  HiveView(Context c) {
+                      super(c); setFocusable(true); setClickable(true);
+                      claim = BitmapFactory.decodeResource(getResources(), com.roblox.client.R.drawable.claimhive);
+                      pressE = BitmapFactory.decodeResource(getResources(), com.roblox.client.R.drawable.press_e);
+                  }
+                  @Override protected void onDraw(Canvas canvas) {
+                      canvas.drawColor(Color.BLACK);
+                      if (hiveVisible && !claimed) canvas.drawBitmap(claim, claimX, claimY, paint);
+                      if (claimed) canvas.drawBitmap(pressE, cannonX, cannonY, paint);
+                  }
+                  @Override public boolean onTouchEvent(MotionEvent event) {
+                      int a = event.getActionMasked();
+                      if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
+                          downs++;
+                          float x = event.getX(event.getActionIndex()), y = event.getY(event.getActionIndex());
+                          Log.e("FakeRobloxHive", "TOUCH_DOWN n=" + downs + " x=" + x + " y=" + y + " claimed=" + claimed + " hive=" + hiveVisible);
+                          if (hiveVisible && !claimed && x >= claimX - 20 && x <= claimX + claim.getWidth() + 20 && y >= claimY - 20 && y <= claimY + claim.getHeight() + 20) {
+                              claimed = true;
+                              Log.e("FakeRobloxHive", "FAKE_CLAIM_TAP x=" + x + " y=" + y);
+                              invalidate();
+                          }
+                      }
+                      if (a == MotionEvent.ACTION_UP) {
+                          gestureUps++;
+                          if (!hiveVisible) {
+                              hiveVisible = true;
+                              Log.e("FakeRobloxHive", "FAKE_HIVE_PROMPT_VISIBLE afterGestureUps=" + gestureUps);
+                              invalidate();
+                          }
+                          Log.e("FakeRobloxHive", "TOUCH_UP n=" + gestureUps + " claimed=" + claimed);
+                      }
+                      return true;
+                  }
+              }
+          }
+          EOF
+          gradle -p fake-roblox --stacktrace :app:assembleDebug
+          test -s fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Android 15 real Start plus hive claim and cannon routing gate
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -eu
+            mkdir -p emulator-artifacts
+            adb install -r fake-roblox/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell cmd appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
+            adb shell am force-stop com.revolution.android || true
+            adb shell am force-stop com.roblox.client || true
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee emulator-artifacts/revo-first-start.txt
+            python3 .ci/enable_revo_accessibility.py
+            adb shell settings get secure enabled_accessibility_services | tee emulator-artifacts/enabled-setting.txt
+            grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
+            adb shell am start -W -n com.revolution.android/.MainActivity > emulator-artifacts/revo-return.txt
+            sleep 8
+            adb logcat -c
+            adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/start-broadcast.txt
+            sleep 18
+            adb exec-out screencap -p > emulator-artifacts/final.png
+            adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
+            adb logcat -d -v time > emulator-artifacts/logcat.txt
+            grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoPreGatherRouter|RevoGatherAdapter|FakeRobloxHive' emulator-artifacts/logcat.txt > emulator-artifacts/route-flow.txt || true
+            cat emulator-artifacts/route-flow.txt
+            python3 - <<'PY'
+            import json, re
+            from pathlib import Path
+            text=Path('emulator-artifacts/logcat.txt').read_text(errors='replace')
+            required=[
+              'FAKE_ROBLOX_URI=roblox://placeId=1537690962',
+              'FAKE_HIVE_PROMPT_VISIBLE',
+              'template=claimhive',
+              'desktop ClaimHive: Backward 2',
+              'desktop KeyPress(E): claim center hive',
+              'FAKE_CLAIM_TAP',
+              'Claimed Hive: 3',
+              'desktop GotoCannon: Forward 12',
+              'desktop GotoCannon: Right 37 slot 1',
+              'desktop GotoCannon: Right 37 slot 2',
+              'desktop GotoCannon: Right 37 slot 3',
+              'desktop GotoCannon: hold Right + Space, 1300ms, Space',
+              'template=press_e',
+              'state=READY_AT_CANNON',
+            ]
+            missing=[x for x in required if x not in text]
+            if missing:
+              raise SystemExit('missing runtime evidence: '+repr(missing))
+            states=[]
+            for line in text.splitlines():
+              if 'RevoElolState' not in line: continue
+              m=re.search(r'RevoElolState:\s*(\{.*\})\s*$', line)
+              if m:
+                try: states.append(json.loads(m.group(1)))
+                except Exception: pass
+            if not states:
+              raise SystemExit('no parseable RevoElolState JSON')
+            s=states[-1]
+            r=s.get('routing') or {}
+            assert s.get('running') is True, s
+            assert r.get('state')=='READY_AT_CANNON', r
+            assert r.get('claimedHive')==3, r
+            assert r.get('cannonSlotMoves')==3, r
+            assert r.get('fieldRoutingPorted') is False, r
+            assert r.get('lastGestureAccepted') is True, r
+            assert (s.get('actionCount') or 0)==0, s  # Gather remains blocked until field routing exists.
+            print('PASS: real Start -> Bee Swarm URI -> source-grounded ClaimHive -> GotoCannon reached READY_AT_CANNON')
+            PY
+
+      - name: Upload hive routing end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0212-hive-cannon-e2e-evidence
+          path: emulator-artifacts/
+          if-no-files-found: warn
