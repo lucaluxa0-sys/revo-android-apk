@@ -1,0 +1,91 @@
+name: Recover exact v0.9c AST codec salt
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-codec-salt.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache codec-salt
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+      - name: Install PE parser
+        run: python3 -m pip install --disable-pip-version-check pefile
+      - name: Dereference codec salt and calculate tag map
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, json, struct
+          import pefile
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          sections=[]
+          for s in pe.sections:
+              sections.append((int(s.VirtualAddress),int(s.PointerToRawData),int(s.SizeOfRawData)))
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders): return rva
+              for srva,sraw,ssz in sections:
+                  if srva<=rva<srva+ssz:return sraw+rva-srva
+              return None
+          def qva(va):
+              off=va2off(va)
+              if off is None: raise ValueError(f'unmapped {va:#x}')
+              return struct.unpack_from('<Q',raw,off)[0]
+          def readva(va,n):
+              off=va2off(va)
+              if off is None: raise ValueError(f'unmapped {va:#x}')
+              return raw[off:off+n]
+
+          # codec.k reads this Go string header: data pointer at ...9b0, length at ...9b8.
+          hdr=0x141b719b0
+          ptr=qva(hdr); ln=qva(hdr+8); salt=readva(ptr,ln)
+          print('salt_header',hex(hdr),'ptr',hex(ptr),'len',ln)
+          print('salt_hex',salt.hex())
+          try: print('salt_utf8',salt.decode())
+          except Exception: print('salt_utf8','<non-utf8>')
+
+          token_types=[
+            ('True','*ast.TrueExpr'),('False','*ast.FalseExpr'),('Nil','*ast.NilExpr'),('Number','*ast.NumberExpr'),
+            ('String','*ast.StringExpr'),('Comma3','*ast.Comma3Expr'),('Ident','*ast.IdentExpr'),('AttrGet','*ast.AttrGetExpr'),
+            ('Table','*ast.TableExpr'),('FuncCall','*ast.FuncCallExpr'),('LogicalOp','*ast.LogicalOpExpr'),('RelOp','*ast.RelationalOpExpr'),
+            ('Concat','*ast.StringConcatOpExpr'),('Arith','*ast.ArithmeticOpExpr'),('UMinus','*ast.UnaryMinusOpExpr'),('UNot','*ast.UnaryNotOpExpr'),
+            ('ULen','*ast.UnaryLenOpExpr'),('Function','*ast.FunctionExpr'),('Assign','*ast.AssignStmt'),('LocalAssign','*ast.LocalAssignStmt'),
+            ('FuncCallStmt','*ast.FuncCallStmt'),('DoBlock','*ast.DoBlockStmt'),('While','*ast.WhileStmt'),('Repeat','*ast.RepeatStmt'),
+            ('If','*ast.IfStmt'),('NumFor','*ast.NumberForStmt'),('GenFor','*ast.GenericForStmt'),('FuncDef','*ast.FuncDefStmt'),
+            ('Return','*ast.ReturnStmt'),('Break','*ast.BreakStmt'),('Label','*ast.LabelStmt'),('Goto','*ast.GotoStmt')]
+          observed=set('f72810a4 176c5126 e58422da 9e2bcb91 da96a157 7db03b83 cb1f565a 0ee9c651 28c3610e 47991d31 8137973a 1f2d88f0 7bbc28b7 353933e9 4482ce9d f053b163 74b3480f ae5b5109 77eb3498 c111f63b 78722c1c 689a308c 2b53c5da'.split())
+          rows=[]
+          for token,typ in token_types:
+              tag=hashlib.sha256(token.encode()+salt).hexdigest()[:8]
+              rows.append({'token':token,'type':typ,'tag':tag,'observed':tag in observed})
+          Path('codec-salt/tag-map.json').write_text(json.dumps(rows,indent=2),encoding='utf-8')
+          Path('codec-salt/salt.json').write_text(json.dumps({'header':hex(hdr),'ptr':hex(ptr),'len':ln,'hex':salt.hex(),'utf8':salt.decode('utf-8','replace')},indent=2),encoding='utf-8')
+          print('===== TAG MAP =====')
+          for r in rows:print(json.dumps(r,sort_keys=True))
+          unmatched=sorted(observed-{r['tag'] for r in rows})
+          print('observed matched',sum(r['observed'] for r in rows),'of',len(observed),'unmatched',unmatched)
+
+      - name: Upload codec salt evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-codec-salt
+          path: codec-salt/
+          if-no-files-found: error
