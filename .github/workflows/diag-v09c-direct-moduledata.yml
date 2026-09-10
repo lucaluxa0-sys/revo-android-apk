@@ -1,0 +1,155 @@
+name: Recover v0.9c functions directly from moduledata
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-direct-moduledata.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache moduledata
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Recover moduledata, functab, and names without pclntab header
+        shell: python
+        run: |
+          from pathlib import Path
+          import json, re, struct
+          import pefile
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics)))
+
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders): return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']: return s['raw']+rva-s['rva']
+              return None
+          def off2va(off):
+              if 0<=off<int(pe.OPTIONAL_HEADER.SizeOfHeaders): return base+off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']: return base+s['rva']+off-s['raw']
+              return None
+          def mapped(va,n=1):
+              off=va2off(va)
+              return off is not None and 0<=off<=len(raw)-n
+          def q(off): return struct.unpack_from('<Q',raw,off)[0]
+          def u32(off): return struct.unpack_from('<I',raw,off)[0]
+          def i32(off): return struct.unpack_from('<i',raw,off)[0]
+          def cstr_va(va,limit=800):
+              off=va2off(va)
+              if off is None:return None
+              z=raw.find(b'\0',off,min(len(raw),off+limit))
+              if z<0:z=min(len(raw),off+limit)
+              b=raw[off:z]
+              try:s=b.decode('utf-8')
+              except Exception:return None
+              if not s or len(s)>limit:return None
+              return s
+
+          # The exact binary's first executable Go function begins at this address. GoReSym independently
+          # identified this same minpc before rejecting the obfuscated pclntab header.
+          minpc=0x1400014a0
+          needle=struct.pack('<Q',minpc)
+          candidates=[]
+          p=0
+          while True:
+              hit=raw.find(needle,p)
+              if hit<0:break
+              # moduledata.minpc is +160 on Go 1.18+ layouts used by contemporary Go.
+              md_off=hit-160
+              md_va=off2va(md_off)
+              if md_off>=0 and md_va is not None and md_off+420<len(raw):
+                  ftab_ptr=q(md_off+128); ftab_len=q(md_off+136); ftab_cap=q(md_off+144)
+                  text=q(md_off+176)
+                  funcname_ptr=q(md_off+8); funcname_len=q(md_off+16)
+                  pcln_ptr=q(md_off+104); pcln_len=q(md_off+112)
+                  types21=q(md_off+296); etypes21=q(md_off+304)
+                  typelinks21_ptr=q(md_off+352); typelinks21_len=q(md_off+360)
+                  types22=q(md_off+296); etypes22=q(md_off+304)
+                  typelinks22_ptr=q(md_off+360); typelinks22_len=q(md_off+368)
+                  score=0
+                  if text==minpc:score+=5
+                  if mapped(ftab_ptr,8) and 1000<ftab_len<500000 and ftab_cap>=ftab_len:score+=5
+                  if mapped(funcname_ptr,1) and 10000<funcname_len<100000000:score+=4
+                  if mapped(pcln_ptr,8) and 10000<pcln_len<100000000:score+=4
+                  candidates.append(dict(score=score,md_off=md_off,md_va=md_va,minpc=q(md_off+160),text=text,
+                      ftab_ptr=ftab_ptr,ftab_len=ftab_len,ftab_cap=ftab_cap,
+                      funcname_ptr=funcname_ptr,funcname_len=funcname_len,pcln_ptr=pcln_ptr,pcln_len=pcln_len,
+                      types21=types21,etypes21=etypes21,typelinks21_ptr=typelinks21_ptr,typelinks21_len=typelinks21_len,
+                      types22=types22,etypes22=etypes22,typelinks22_ptr=typelinks22_ptr,typelinks22_len=typelinks22_len))
+              p=hit+1
+          candidates.sort(key=lambda x:x['score'],reverse=True)
+
+          report=[f'image_base=0x{base:x} image_size=0x{size:x}',f'moduledata_candidates={len(candidates)}']
+          for c in candidates[:30]:report.append('CANDIDATE '+json.dumps(c,sort_keys=True))
+
+          recoveries=[]
+          for c in candidates[:20]:
+              if c['score']<10:continue
+              foff=va2off(c['ftab_ptr']); poff=va2off(c['pcln_ptr'])
+              if foff is None or poff is None:continue
+              funcs=[]; recognizable=0; revo=0; route=0
+              n=min(int(c['ftab_len']),200000)
+              if foff+n*8>len(raw):continue
+              for i in range(max(0,n-1)):
+                  entry=u32(foff+i*8); funcoff=u32(foff+i*8+4)
+                  fmeta=poff+funcoff
+                  if not (0<=fmeta+8<=len(raw)):continue
+                  nameoff=i32(fmeta+4)
+                  name=cstr_va(c['funcname_ptr']+nameoff,900)
+                  if not name:continue
+                  addr=c['text']+entry
+                  if not (base<=addr<base+size):continue
+                  if re.match(r'^(runtime\.|internal/|github\.com/|golang\.org/|main\.|revo_)',name):recognizable+=1
+                  if 'nosyliam/revolution' in name or name.startswith('revo_'):revo+=1
+                  if re.search(r'Route|route|Routing|routing|Field|field|Gather|gather|Cannon|cannon|Hive|hive|Walk|walk|Navigate|navigate|Path|path|Spawn|spawn',name):route+=1
+                  funcs.append(dict(i=i,address=addr,entry=entry,funcoff=funcoff,nameoff=nameoff,name=name))
+              score=(revo,recognizable,len(funcs))
+              recoveries.append((score,c,funcs,route))
+              report.append(f"RECOVERY md=0x{c['md_va']:x} score={score} route_names={route}")
+
+          recoveries.sort(key=lambda x:x[0],reverse=True)
+          best_funcs=[]; best=None
+          if recoveries:
+              _,best,best_funcs,route_count=recoveries[-1] if False else recoveries[0]
+              report.append('BEST_MODULEDATA '+json.dumps(best,sort_keys=True))
+              report.append(f'BEST_FUNCTIONS={len(best_funcs)} ROUTE_NAME_MATCHES={route_count}')
+              rx=re.compile(r'Route|route|Routing|routing|Field|field|Gather|gather|Cannon|cannon|Hive|hive|Walk|walk|Navigate|navigate|Path|path|Spawn|spawn|Revo_Heafad825296ca85|Revo_C6b27ea38537a940')
+              for f in best_funcs:
+                  if rx.search(f['name']): report.append('FUNC '+json.dumps(f,sort_keys=True))
+
+          Path('moduledata/summary.txt').write_text('\n'.join(report),encoding='utf-8')
+          Path('moduledata/functions.json').write_text(json.dumps(best_funcs,indent=2),encoding='utf-8')
+          Path('moduledata/candidates.json').write_text(json.dumps(candidates,indent=2),encoding='utf-8')
+          print('\n'.join(report[:12000]))
+
+      - name: Upload direct moduledata evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-direct-moduledata
+          path: moduledata/
+          if-no-files-found: error
