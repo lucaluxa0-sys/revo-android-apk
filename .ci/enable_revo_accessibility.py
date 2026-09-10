@@ -97,26 +97,65 @@ def set_service_enabled():
         )
 
 
-def bound_section(text):
-    # Android 15 dumpsys accessibility prints separate Bound/Enabled/Binding/Crashed
-    # service sections. Only Bound services proves that AccessibilityManager actually
-    # connected our service; merely appearing in the secure setting is not enough.
+def section(text, heading, next_headings):
+    following = "|".join(re.escape(item) for item in next_headings)
     match = re.search(
-        r"(?is)Bound services\s*:(.*?)(?="
-        r"\n\s*(?:Enabled services|Binding services|Crashed services|Client list|User state)\s*:|\Z)",
+        rf"(?is){re.escape(heading)}\s*:(.*?)(?=\n\s*(?:{following})\s*:|\Z)",
         text or "",
     )
     return match.group(1) if match else ""
 
 
-def binding_verified(accessibility_dump):
-    section = bound_section(accessibility_dump)
-    if not section:
-        return False
-    return component_present(section)
+def bound_section(text):
+    # Android 15 intentionally renders bound services as Service[label=..., ...]
+    # and does NOT include the component class name in that line.
+    return section(
+        text,
+        "Bound services",
+        ("Enabled services", "Binding services", "Crashed services", "Client list", "User state"),
+    )
 
 
-def write_state_artifacts(attempt, settings_services, master, accessibility_dump):
+def enabled_section(text):
+    return section(
+        text,
+        "Enabled services",
+        ("Binding services", "Crashed services", "Client list", "User state"),
+    )
+
+
+def accessibility_manager_reports_bound(accessibility_dump):
+    # The previous verifier searched this section for RevoAccessibilityService and
+    # false-failed on API 35 because dumpsys prints only the service label here.
+    # A populated Service[...] record proves AccessibilityManager has a bound
+    # accessibility service. Exact component identity is checked independently below.
+    return bool(re.search(r"\bService\s*\[", bound_section(accessibility_dump)))
+
+
+def accessibility_manager_reports_enabled_component(accessibility_dump):
+    return component_present(enabled_section(accessibility_dump))
+
+
+def activity_service_dump():
+    return shell("dumpsys", "activity", "services", PACKAGE, check=False).stdout or ""
+
+
+def exact_service_active(activity_dump):
+    # ActivityManager's service table keeps the concrete component identity, unlike
+    # dumpsys accessibility's Bound-services display on API 35. Require an active
+    # ServiceRecord for Revolution's exact accessibility component so a similarly
+    # labelled third-party accessibility service cannot satisfy this gate.
+    value = activity_dump or ""
+    return component_present(value) and bool(re.search(r"\bServiceRecord\s*\{", value))
+
+
+def write_state_artifacts(
+    attempt,
+    settings_services,
+    master,
+    accessibility_dump,
+    activity_dump,
+):
     (ARTIFACT_DIR / "a11y-enabled-setting.txt").write_text(
         settings_services + "\n", encoding="utf-8"
     )
@@ -124,57 +163,70 @@ def write_state_artifacts(attempt, settings_services, master, accessibility_dump
     (ARTIFACT_DIR / "a11y-dumpsys.txt").write_text(
         accessibility_dump, encoding="utf-8", errors="replace"
     )
+    (ARTIFACT_DIR / "a11y-activity-services.txt").write_text(
+        activity_dump, encoding="utf-8", errors="replace"
+    )
     (ARTIFACT_DIR / "a11y-attempt.txt").write_text(str(attempt) + "\n", encoding="utf-8")
 
 
 def wait_for_bound_service(timeout_s=20.0):
     deadline = time.monotonic() + timeout_s
     attempt = 0
-    last = ("", "", "")
+    last = ("", "", "", "")
     while time.monotonic() < deadline:
         services = read_setting("enabled_accessibility_services")
         master = read_setting("accessibility_enabled")
-        dump = shell("dumpsys", "accessibility", check=False).stdout or ""
-        last = (services, master, dump)
-        write_state_artifacts(attempt, services, master, dump)
+        accessibility_dump = shell("dumpsys", "accessibility", check=False).stdout or ""
+        activity_dump = activity_service_dump()
+        last = (services, master, accessibility_dump, activity_dump)
+        write_state_artifacts(
+            attempt,
+            services,
+            master,
+            accessibility_dump,
+            activity_dump,
+        )
 
         setting_ok = component_present(services) and master == "1"
-        bound_ok = binding_verified(dump)
+        enabled_exact = accessibility_manager_reports_enabled_component(accessibility_dump)
+        manager_bound = accessibility_manager_reports_bound(accessibility_dump)
+        active_exact = exact_service_active(activity_dump)
         print(
-            f"A11Y probe={attempt} setting_ok={setting_ok} bound_ok={bound_ok} "
+            f"A11Y probe={attempt} setting_ok={setting_ok} enabled_exact={enabled_exact} "
+            f"manager_bound={manager_bound} active_exact={active_exact} "
             f"services={services!r} master={master!r}",
             flush=True,
         )
-        if setting_ok and bound_ok:
+        if setting_ok and enabled_exact and manager_bound and active_exact:
             return True
         time.sleep(0.5)
         attempt += 1
 
-    services, master, dump = last
+    services, master, accessibility_dump, activity_dump = last
     print("===== FINAL ACCESSIBILITY DUMPSYS =====", flush=True)
-    print(dump, flush=True)
+    print(accessibility_dump, flush=True)
+    print("===== FINAL ACTIVITY SERVICE DUMPSYS =====", flush=True)
+    print(activity_dump, flush=True)
     print("===== REVOLUTION ACCESSIBILITY LOGCAT =====", flush=True)
     logcat = adb("logcat", "-d", "-v", "time", check=False).stdout or ""
     for line in logcat.splitlines():
         if re.search(r"RevoAccessibility|AccessibilityManager|com\.revolution\.android", line, re.I):
             print(line, flush=True)
     raise RuntimeError(
-        "Revolution Accessibility secure setting was not sufficient to produce a bound service "
+        "Revolution Accessibility did not produce a verified exact active service binding "
         f"within {timeout_s:.0f}s; services={services!r} master={master!r}"
     )
 
 
 def main():
-    # This helper is CI setup, not a macro assertion. The previous Android-Settings
-    # UI automation repeatedly remained on the top-level page on API 35 and never
-    # reached the service switch. The emulator shell can set the same secure state
-    # deterministically, after which we fail closed unless AccessibilityManager binds
-    # the *real installed* Revolution service.
+    # CI setup only: enable the real installed service deterministically, then fail
+    # closed unless both AccessibilityManager and ActivityManager prove the service
+    # is enabled/bound and the concrete active component is Revolution's service.
     verify_service_declared()
     set_service_enabled()
     wait_for_bound_service()
     print(
-        "PASS: Revolution Accessibility is enabled in secure settings and bound by AccessibilityManager",
+        "PASS: Revolution Accessibility is enabled and its exact service is active/bound",
         flush=True,
     )
     return 0
