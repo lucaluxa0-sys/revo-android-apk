@@ -1,0 +1,156 @@
+name: Trace exact v0.9c patterns decryptor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-patterns-decrypt.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned binary and patterns dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache decrypt-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          curl -fL --retry 4 --retry-delay 2 -o .cache/patterns.bin \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro/v0.9c-hotfix3/datasets/v8/patterns.bin
+          sha256sum .cache/patterns.bin | tee decrypt-evidence/patterns-sha256.txt
+          wc -c .cache/patterns.bin | tee decrypt-evidence/patterns-size.txt
+          xxd -l 128 .cache/patterns.bin | tee decrypt-evidence/patterns-head.txt
+
+      - name: Install PE and disassembly helpers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Annotate decrypt and dataset loader functions
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, json, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_GRP_CALL
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase); image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics),data=s.get_data()))
+
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
+              return None
+          def off2va(off):
+              if 0<=off<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return base+off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']:return base+s['rva']+off-s['raw']
+              return None
+          def q(off):return struct.unpack_from('<Q',raw,off)[0]
+          def u32(off):return struct.unpack_from('<I',raw,off)[0]
+          def i32(off):return struct.unpack_from('<i',raw,off)[0]
+          def cstr(va,limit=900):
+              off=va2off(va)
+              if off is None:return None
+              z=raw.find(b'\0',off,min(len(raw),off+limit)); z=min(len(raw),off+limit) if z<0 else z
+              try:s=raw[off:z].decode('utf-8')
+              except Exception:return None
+              return s if s else None
+          def exact_printable(va,limit=128):
+              off=va2off(va)
+              if off is None:return ''
+              out=[]
+              for b in raw[off:min(len(raw),off+limit)]:
+                  if 32<=b<127:out.append(chr(b))
+                  else:break
+              return ''.join(out)
+          def hex_at(va,n=96):
+              off=va2off(va)
+              if off is None:return ''
+              return raw[off:min(len(raw),off+n)].hex()
+
+          # Recover complete Go function table directly from firstmoduledata.
+          minpc=0x1400014a0; best=None; p=0
+          while True:
+              hit=raw.find(struct.pack('<Q',minpc),p)
+              if hit<0:break
+              md=hit-160
+              if md>=0 and md+200<len(raw):
+                  ftab=q(md+128); n=q(md+136); cap=q(md+144); text=q(md+176); fn=q(md+8); pcln=q(md+104)
+                  score=sum([text==minpc,1000<n<500000,cap>=n,va2off(ftab) is not None,va2off(fn) is not None,va2off(pcln) is not None])
+                  if best is None or score>best[0]:best=(score,(ftab,n,text,fn,pcln))
+              p=hit+1
+          if not best or best[0]<5:raise SystemExit('moduledata recovery failed')
+          ftab,n,text,fn,pcln=best[1]; foff=va2off(ftab); poff=va2off(pcln)
+          funcs=[]
+          for i in range(int(n)-1):
+              entry=u32(foff+i*8); funcoff=u32(foff+i*8+4); fm=poff+funcoff
+              if not (0<=fm+8<=len(raw)):continue
+              name=cstr(fn+i32(fm+4)); addr=text+entry
+              if name and base<=addr<base+image_size:funcs.append(dict(address=addr,name=name))
+          funcs.sort(key=lambda x:x['address']); addrs=[f['address'] for f in funcs]; names={f['address']:f['name'] for f in funcs}
+          def fend(addr):
+              i=bisect.bisect_left(addrs,addr); return addrs[i+1] if i+1<len(addrs) else addr+0x10000
+          def fbytes(addr):
+              end=fend(addr)
+              for s in sections:
+                  sv=base+s['rva']; ev=sv+len(s['data'])
+                  if sv<=addr<ev:
+                      a=addr-sv; z=min(len(s['data']),end-sv); return s['data'][a:z]
+              return b''
+
+          targets={
+            0x140a3d380:'aes_gcm_decrypt',
+            0x140a49760:'read_decrypt_gzip_bson',
+            0x140a49040:'register_decoded_dataset',
+            0x140a49f20:'dataset_load',
+            0x140a4c480:'compile_and_register_lua',
+            0x140a4ca60:'load_plain_lua_pattern',
+          }
+          mdx=Cs(CS_ARCH_X86,CS_MODE_64);mdx.detail=True
+          lines=[]; allrefs=[]
+          for addr,label in targets.items():
+              lines.append(f'\n===== {label} {addr:#x} {names.get(addr)} end={fend(addr):#x} =====')
+              for ins in mdx.disasm(fbytes(addr),addr):
+                  ann=[]
+                  if ins.group(CS_GRP_CALL):
+                      for op in ins.operands:
+                          if op.type==X86_OP_IMM:
+                              t=int(op.imm)&((1<<64)-1)
+                              if t in names:ann.append('CALL='+names[t])
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          t=ins.address+ins.size+op.mem.disp
+                          if base<=t<base+image_size:
+                              txt=exact_printable(t,160)
+                              hx=hex_at(t,64)
+                              ann.append(f'RIP={t:#x} ASCII={txt!r} HEX64={hx}')
+                              allrefs.append(dict(function=addr,label=label,insn=ins.address,target=t,ascii=txt,hex64=hx,op=ins.op_str))
+                  suffix=(' ; '+' | '.join(ann)) if ann else ''
+                  lines.append(f'{ins.address:#x}: {ins.mnemonic:8s} {ins.op_str}{suffix}')
+          Path('decrypt-evidence/annotated-disassembly.txt').write_text('\n'.join(lines),encoding='utf-8')
+          Path('decrypt-evidence/rip-refs.json').write_text(json.dumps(allrefs,indent=2),encoding='utf-8')
+          print('\n'.join(lines[:5000]))
+
+      - name: Upload decrypt evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-patterns-decrypt
+          path: decrypt-evidence/
+          if-no-files-found: error
