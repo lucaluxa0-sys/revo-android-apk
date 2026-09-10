@@ -1,0 +1,218 @@
+name: Trace v0.9c route callers from recovered function table
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-route-callgraph.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache callgraph
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Install parsers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Recover direct route call graph and string evidence
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, json, re, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_GRP_CALL
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase); image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics),data=s.get_data()))
+
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
+              return None
+          def off2va(off):
+              if 0<=off<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return base+off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']:return base+s['rva']+off-s['raw']
+              return None
+          def u32(off):return struct.unpack_from('<I',raw,off)[0]
+          def i32(off):return struct.unpack_from('<i',raw,off)[0]
+          def q(off):return struct.unpack_from('<Q',raw,off)[0]
+          def cstr(va,limit=900):
+              off=va2off(va)
+              if off is None:return None
+              z=raw.find(b'\0',off,min(len(raw),off+limit)); z=min(len(raw),off+limit) if z<0 else z
+              try:s=raw[off:z].decode('utf-8')
+              except Exception:return None
+              return s if s else None
+          def printable_window(va,before=64,after=320):
+              off=va2off(va)
+              if off is None:return ''
+              a=max(0,off-before); z=min(len(raw),off+after)
+              b=raw[a:z]
+              return ''.join(chr(x) if 32<=x<127 else '.' for x in b)
+
+          # Parse firstmoduledata directly. The exact minpc was independently reported by GoReSym.
+          minpc=0x1400014a0
+          best=None
+          p=0
+          while True:
+              hit=raw.find(struct.pack('<Q',minpc),p)
+              if hit<0:break
+              md=hit-160
+              if md>=0 and md+200<len(raw):
+                  ftab_ptr=q(md+128); n=q(md+136); cap=q(md+144); text=q(md+176)
+                  fnptr=q(md+8); fnlen=q(md+16); pcln=q(md+104); pclnlen=q(md+112)
+                  score=sum([text==minpc,1000<n<500000,cap>=n,va2off(ftab_ptr) is not None,
+                             va2off(fnptr) is not None,va2off(pcln) is not None])
+                  if best is None or score>best[0]:best=(score,dict(md=md,ftab_ptr=ftab_ptr,n=n,text=text,fnptr=fnptr,pcln=pcln))
+              p=hit+1
+          if not best or best[0]<5:raise SystemExit('no valid moduledata')
+          mdinfo=best[1]; foff=va2off(mdinfo['ftab_ptr']); poff=va2off(mdinfo['pcln'])
+          funcs=[]
+          for i in range(int(mdinfo['n'])-1):
+              entry=u32(foff+i*8); funcoff=u32(foff+i*8+4); fm=poff+funcoff
+              if not (0<=fm+8<=len(raw)):continue
+              no=i32(fm+4); name=cstr(mdinfo['fnptr']+no)
+              addr=mdinfo['text']+entry
+              if name and base<=addr<base+image_size: funcs.append(dict(address=addr,name=name,index=i))
+          funcs.sort(key=lambda x:x['address'])
+          addrs=[f['address'] for f in funcs]
+          by_addr={f['address']:f for f in funcs}
+          def containing(va):
+              i=bisect.bisect_right(addrs,va)-1
+              if i<0:return None
+              end=addrs[i+1] if i+1<len(addrs) else base+image_size
+              return funcs[i] if funcs[i]['address']<=va<end else None
+          def fn_end(f):
+              i=bisect.bisect_left(addrs,f['address']); return addrs[i+1] if i+1<len(addrs) else min(base+image_size,f['address']+0x10000)
+          def code_bytes(f):
+              end=fn_end(f)
+              for s in sections:
+                  sv=base+s['rva']; ev=sv+len(s['data'])
+                  if sv<=f['address']<ev:
+                      a=f['address']-sv; z=min(len(s['data']),end-sv); return s['data'][a:z]
+              return b''
+
+          mdx=Cs(CS_ARCH_X86,CS_MODE_64);mdx.detail=True
+          edges=[]; refs=[]
+          for f in funcs:
+              data=code_bytes(f)
+              if not data:continue
+              for ins in mdx.disasm(data,f['address']):
+                  if ins.group(CS_GRP_CALL):
+                      for op in ins.operands:
+                          if op.type==X86_OP_IMM:
+                              t=int(op.imm)&((1<<64)-1); callee=by_addr.get(t)
+                              if callee:edges.append(dict(caller=f['address'],callee=t,insn=ins.address))
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          t=ins.address+ins.size+op.mem.disp
+                          if base<=t<base+image_size:
+                              refs.append(dict(function=f['address'],insn=ins.address,target=t,mnemonic=ins.mnemonic,op_str=ins.op_str))
+
+          names={f['address']:f['name'] for f in funcs}
+          target_rx=re.compile(r'(?:\.Route$|\.RouteToAny$|\.RouteForVertexes$|\.RouteClosest$|\.RouteOptimize$|\.FindDeadEnds$|\.Vertexes$)')
+          route_targets={f['address'] for f in funcs if target_rx.search(f['name']) and f['name'].startswith('revo_')}
+          # Also include field/gather runtime methods that survived with semantic names.
+          semantic_rx=re.compile(r'(AlignWithSprinkler|SnapshotGatherEnter|GatherEnterCountsCopy|SnapshotGatherExit|RBCGather|ExecuteWithAlignment|OnMoveComplete|OnReturnToSprinklerComplete)')
+          semantic_targets={f['address'] for f in funcs if semantic_rx.search(f['name']) and ('revo_' in f['name'] or 'nosyliam/revolution' in f['name'])}
+          seed=route_targets|semantic_targets
+
+          incoming={a:[] for a in addrs}; outgoing={a:[] for a in addrs}
+          for e in edges:
+              incoming.setdefault(e['callee'],[]).append(e); outgoing.setdefault(e['caller'],[]).append(e)
+
+          # Expand three caller levels and one callee level around router targets.
+          selected=set(seed); frontier=set(route_targets)
+          for _ in range(3):
+              nxt=set()
+              for t in frontier:
+                  for e in incoming.get(t,[]):
+                      if e['caller'] not in selected:nxt.add(e['caller'])
+              selected|=nxt; frontier=nxt
+          for t in list(selected):
+              for e in outgoing.get(t,[]):selected.add(e['callee'])
+
+          # Capture exact route literals and packed-slab context used by selected functions.
+          literals=['pinetree-br','blue-cannon','goto-cannon','next-vertex','afb-target-field','Pine Tree Forest',
+                    'gather/e_lol.lua','Entering Field: %s','Exiting Field: %s','Travelling To: %s',
+                    'Route Destination: %s','Skipping empty route','sprinkler_invalid']
+          literal_occ=[]
+          for text in literals:
+              b=text.encode(); p=0
+              while True:
+                  off=raw.find(b,p)
+                  if off<0:break
+                  va=off2va(off)
+                  if va is not None:literal_occ.append(dict(text=text,va=va,off=off))
+                  p=off+1
+
+          selected_refs=[]
+          for r in refs:
+              if r['function'] not in selected:continue
+              win=printable_window(r['target'],64,700)
+              hits=[x['text'] for x in literal_occ if x['text'] in win]
+              # Keep route literal hits and otherwise readable Revolution-ish rodata context.
+              if hits or any(k in win for k in ['cannon','field','gather','route','sprinkler','hive','vertex']):
+                  rr=dict(r); rr['hits']=hits; rr['window']=win; selected_refs.append(rr)
+
+          report=[f'functions={len(funcs)} direct_edges={len(edges)} route_targets={len(route_targets)} semantic_targets={len(semantic_targets)} selected={len(selected)}']
+          report.append('===== ROUTE TARGETS =====')
+          for a in sorted(route_targets):report.append(f'{a:#x} {names[a]}')
+          report.append('===== CALLER CHAINS =====')
+          for t in sorted(route_targets):
+              report.append(f'\nTARGET {t:#x} {names[t]}')
+              seen={t}; level={t}
+              for depth in range(1,4):
+                  nxt=set()
+                  for cur in sorted(level):
+                      for e in incoming.get(cur,[]):
+                          c=e['caller']; report.append(f'  D{depth} {c:#x} {names.get(c)} -> {cur:#x} {names.get(cur)} @ {e["insn"]:#x}')
+                          if c not in seen:nxt.add(c);seen.add(c)
+                  level=nxt
+          report.append('\n===== SELECTED OUTGOING =====')
+          for a in sorted(selected):
+              if a not in names:continue
+              report.append(f'\nFUNC {a:#x} {names[a]}')
+              for e in outgoing.get(a,[]):
+                  report.append(f'  CALL {e["callee"]:#x} {names.get(e["callee"])} @ {e["insn"]:#x}')
+          report.append('\n===== SELECTED STRING REFS =====')
+          for r in selected_refs:
+              report.append('REF '+json.dumps(dict(function=f'{r["function"]:#x}',function_name=names.get(r['function']),
+                  insn=f'{r["insn"]:#x}',target=f'{r["target"]:#x}',mnemonic=r['mnemonic'],op_str=r['op_str'],hits=r['hits'],window=r['window']),sort_keys=True))
+
+          Path('callgraph/summary.txt').write_text('\n'.join(report),encoding='utf-8')
+          Path('callgraph/functions.json').write_text(json.dumps(funcs,indent=2),encoding='utf-8')
+          Path('callgraph/edges.json').write_text(json.dumps(edges,indent=2),encoding='utf-8')
+          Path('callgraph/selected-refs.json').write_text(json.dumps(selected_refs,indent=2),encoding='utf-8')
+          print('\n'.join(report[:16000]))
+
+      - name: Upload route call graph evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-route-callgraph
+          path: callgraph/
+          if-no-files-found: error
