@@ -8,6 +8,7 @@ PACKAGE = "com.revolution.android"
 SERVICE_CLASS = "com.revolution.android.RevoAccessibilityService"
 SERVICE_COMPONENT = f"{PACKAGE}/{SERVICE_CLASS}"
 SHORT_COMPONENT = f"{PACKAGE}/.RevoAccessibilityService"
+BIND_ACCESSIBILITY_OP = "android:bind_accessibility_service"
 ARTIFACT_DIR = Path("emulator-artifacts")
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -76,7 +77,42 @@ def verify_service_declared():
     print("PASS prerequisite: installed package declares RevoAccessibilityService", flush=True)
 
 
+def grant_bind_accessibility_appop():
+    before = shell(
+        "cmd", "appops", "get", PACKAGE, BIND_ACCESSIBILITY_OP, check=False
+    )
+    before_text = before.stdout or ""
+    (ARTIFACT_DIR / "a11y-bind-appop-before.txt").write_text(
+        before_text, encoding="utf-8", errors="replace"
+    )
+
+    set_result = shell(
+        "cmd", "appops", "set", PACKAGE, BIND_ACCESSIBILITY_OP, "allow", check=False
+    )
+    if set_result.returncode != 0:
+        raise RuntimeError(
+            "failed to allow android:bind_accessibility_service AppOp: "
+            + (set_result.stdout or "")
+        )
+
+    after = shell(
+        "cmd", "appops", "get", PACKAGE, BIND_ACCESSIBILITY_OP, check=False
+    )
+    after_text = after.stdout or ""
+    (ARTIFACT_DIR / "a11y-bind-appop-after.txt").write_text(
+        after_text, encoding="utf-8", errors="replace"
+    )
+    if after.returncode != 0 or not re.search(r"\ballow(?:ed)?\b", after_text, re.I):
+        raise RuntimeError(
+            "android:bind_accessibility_service AppOp did not read back as allowed: "
+            + after_text
+        )
+    print("PASS prerequisite: BIND_ACCESSIBILITY_SERVICE AppOp is allowed", flush=True)
+
+
 def set_service_enabled():
+    grant_bind_accessibility_appop()
+
     current = enabled_services()
     print(f"Existing enabled accessibility services: {current!r}", flush=True)
     if not any(component_present(entry) for entry in current):
@@ -219,8 +255,9 @@ def wait_for_bound_service(timeout_s=20.0):
 
 def main():
     # CI setup only. On the clean Android emulator, fail closed unless the installed
-    # package declares the exact service, secure settings enable only that component,
-    # and AccessibilityManager reports exactly one clean bound service for it.
+    # package declares the exact service, its bind AppOp is explicitly allowed,
+    # secure settings enable only that component, and AccessibilityManager reports
+    # exactly one clean bound service for it.
     verify_service_declared()
     set_service_enabled()
     wait_for_bound_service()
