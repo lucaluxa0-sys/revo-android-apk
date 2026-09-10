@@ -1,4 +1,4 @@
-name: Test Revo Android v0.2.12 hive to cannon end to end
+name: Test Revo Android v0.2.12 full Pine Tree e_lol end to end
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - '.ci/enable_revo_accessibility.py'
       - '.ci/verify_v0212_hive_cannon_e2e.py'
       - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-field-routing.py'
       - 'tools/patch-native-v0212-template-contrast.py'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/instrument-v0211-elol-e2e.py'
@@ -24,7 +25,7 @@ permissions:
   contents: read
 
 jobs:
-  hive-cannon-real-flow:
+  full-real-flow:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -48,15 +49,23 @@ jobs:
           unzip -q /tmp/source.zip
           python3 tools/patch-native-v0211-bee-swarm-launch.py
           python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-field-routing.py
           python3 tools/patch-native-v0212-template-contrast.py
           python3 tools/instrument-v0211-elol-e2e.py
-          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/patch-native-v0212-template-contrast.py tools/instrument-v0211-elol-e2e.py .ci/verify_v0212_hive_cannon_e2e.py
+          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/patch-native-v0212-field-routing.py tools/patch-native-v0212-template-contrast.py tools/instrument-v0211-elol-e2e.py .ci/verify_v0212_hive_cannon_e2e.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'desktop GotoCannon: Forward 12' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'desktop GotoCannon: Right 37 slot' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'desktop cannon.pinetree-br: Forward+Left 6050ms + Space@0,850,5670' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'desktop pinetree-br.pinetree-center: Backward+Left 70' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'maskedBackgroundHasContrast' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'joystickWithDoubleTap' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'cameraYawSteps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'roblox-foreground-frame-delta-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           test -s revo-android/app/src/main/assets/revo-routing/claimhive.png
           test -s revo-android/app/src/main/assets/revo-routing/press_e.png
 
@@ -84,14 +93,14 @@ jobs:
               > revo-android/app/src/main/assets/www/android-wails-shim.js
           node --check revo-android/app/src/main/assets/www/android-wails-shim.js
 
-      - name: Build Revolution hive-routing APK
+      - name: Build Revolution full-routing APK
         shell: bash
         run: |
           set -euo pipefail
           gradle -p revo-android --stacktrace clean :app:assembleDebug
           test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Build hive-reactive CI Roblox receiver with recovered Revolution templates
+      - name: Build gesture-reactive CI Roblox receiver with recovered Revolution templates
         shell: bash
         run: |
           set -euo pipefail
@@ -101,7 +110,7 @@ jobs:
           cat > fake-roblox/settings.gradle.kts <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
-          rootProject.name = "FakeRobloxHiveRoute"
+          rootProject.name = "FakeRobloxFullRoute"
           include(":app")
           EOF
           cat > fake-roblox/build.gradle.kts <<'EOF'
@@ -126,7 +135,7 @@ jobs:
           EOF
           cat > fake-roblox/app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application android:theme="@style/AppTheme" android:label="Fake Roblox Hive Route CI">
+            <application android:theme="@style/AppTheme" android:label="Fake Roblox Full Route CI">
               <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
                 <intent-filter>
                   <action android:name="android.intent.action.MAIN" />
@@ -169,6 +178,8 @@ jobs:
                   private final Bitmap pressE;
                   private boolean hiveVisible = false;
                   private boolean claimed = false;
+                  private boolean cannonFired = false;
+                  private int worldPhase = 0;
                   private int gestureUps = 0;
                   private int downs = 0;
                   private final int claimX = 570, claimY = 320;
@@ -179,19 +190,36 @@ jobs:
                       pressE = BitmapFactory.decodeResource(getResources(), com.roblox.client.R.drawable.press_e);
                   }
                   @Override protected void onDraw(Canvas canvas) {
-                      canvas.drawColor(Color.BLACK);
+                      if (cannonFired) {
+                          canvas.drawColor((worldPhase & 1) == 0 ? Color.rgb(18, 54, 118) : Color.rgb(176, 62, 24));
+                          paint.setColor((worldPhase & 1) == 0 ? Color.WHITE : Color.BLACK);
+                          paint.setTextSize(42f);
+                          canvas.drawText("gesture-reactive Bee Swarm world phase=" + worldPhase, 80, 210, paint);
+                      } else {
+                          canvas.drawColor(Color.BLACK);
+                      }
                       if (hiveVisible && !claimed) canvas.drawBitmap(claim, claimX, claimY, paint);
-                      if (claimed) canvas.drawBitmap(pressE, cannonX, cannonY, paint);
+                      if (claimed && !cannonFired) canvas.drawBitmap(pressE, cannonX, cannonY, paint);
                   }
                   @Override public boolean onTouchEvent(MotionEvent event) {
                       int a = event.getActionMasked();
                       if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
                           downs++;
-                          float x = event.getX(event.getActionIndex()), y = event.getY(event.getActionIndex());
-                          Log.e("FakeRobloxHive", "TOUCH_DOWN n=" + downs + " x=" + x + " y=" + y + " claimed=" + claimed + " hive=" + hiveVisible);
+                          int index = event.getActionIndex();
+                          float x = event.getX(index), y = event.getY(index);
+                          Log.e("FakeRobloxHive", "TOUCH_DOWN n=" + downs + " x=" + x + " y=" + y + " claimed=" + claimed + " hive=" + hiveVisible + " cannonFired=" + cannonFired);
                           if (hiveVisible && !claimed && x >= claimX - 20 && x <= claimX + claim.getWidth() + 20 && y >= claimY - 20 && y <= claimY + claim.getHeight() + 20) {
                               claimed = true;
                               Log.e("FakeRobloxHive", "FAKE_CLAIM_TAP x=" + x + " y=" + y);
+                              invalidate();
+                          } else if (claimed && !cannonFired && x >= cannonX - 20 && x <= cannonX + pressE.getWidth() + 20 && y >= cannonY - 20 && y <= cannonY + pressE.getHeight() + 20) {
+                              cannonFired = true;
+                              worldPhase = 0;
+                              Log.e("FakeRobloxHive", "FAKE_CANNON_INTERACT x=" + x + " y=" + y);
+                              invalidate();
+                          } else if (cannonFired) {
+                              worldPhase++;
+                              Log.e("FakeRobloxHive", "FAKE_WORLD_MOTION phase=" + worldPhase + " action=" + a + " x=" + x + " y=" + y);
                               invalidate();
                           }
                       }
@@ -202,7 +230,7 @@ jobs:
                               Log.e("FakeRobloxHive", "FAKE_HIVE_PROMPT_VISIBLE afterGestureUps=" + gestureUps);
                               invalidate();
                           }
-                          Log.e("FakeRobloxHive", "TOUCH_UP n=" + gestureUps + " claimed=" + claimed);
+                          Log.e("FakeRobloxHive", "TOUCH_UP n=" + gestureUps + " claimed=" + claimed + " cannonFired=" + cannonFired + " worldPhase=" + worldPhase);
                       }
                       return true;
                   }
@@ -219,7 +247,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
 
-      - name: Android 15 real Start plus hive claim and cannon routing gate
+      - name: Android 15 full Start through Pine Tree Gather gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -244,18 +272,18 @@ jobs:
             sleep 8
             adb logcat -c
             adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/start-broadcast.txt
-            sleep 18
+            sleep 52
             adb exec-out screencap -p > emulator-artifacts/final.png
             adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
             adb logcat -d -v time > emulator-artifacts/logcat.txt
-            grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoPreGatherRouter|RevoGatherAdapter|FakeRobloxHive' emulator-artifacts/logcat.txt > emulator-artifacts/route-flow.txt || true
+            grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoPreGatherRouter|RevoGatherAdapter|RevoMovementEvidence|FakeRobloxHive' emulator-artifacts/logcat.txt > emulator-artifacts/route-flow.txt || true
             cat emulator-artifacts/route-flow.txt
             python3 .ci/verify_v0212_hive_cannon_e2e.py
 
-      - name: Upload hive routing end-to-end evidence
+      - name: Upload full routing end-to-end evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: revo-v0212-hive-cannon-e2e-evidence
+          name: revo-v0212-full-pinetree-elol-e2e-evidence
           path: emulator-artifacts/
           if-no-files-found: warn
