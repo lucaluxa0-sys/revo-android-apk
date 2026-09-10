@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/diag-android-engine-source.yml'
 
+# One-shot source inspection trigger for the v0.2.12 capture failure.
 permissions:
   contents: read
 
