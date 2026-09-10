@@ -1,0 +1,71 @@
+name: Diagnose exact desktop Start control components
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-control-vf-wf.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore extractor and pinned desktop frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          mkdir -p .cache /tmp/revo-www control-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/revo-www
+
+      - name: Extract Vf and Wf definitions and all call sites
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          js = next(Path('/tmp/revo-www').rglob('index-*.js'))
+          text = js.read_text(errors='replace')
+          out=[f'bundle={js.name} bytes={len(text)}']
+          for sym in ['Vf','Wf']:
+              out.append(f'\n===== SYMBOL {sym} =====')
+              pats=[
+                  rf'function\s+{sym}\s*\(',
+                  rf'(?:const|let|var)\s+{sym}\s*=',
+                  rf'(?<![A-Za-z0-9_$]){sym}\s*=',
+              ]
+              defs=[]
+              for pat in pats:
+                  defs.extend(m.start() for m in re.finditer(pat,text))
+              defs=sorted(set(defs))
+              out.append('definitions='+repr(defs))
+              for pos in defs[:10]:
+                  out.append(f'--- definition@{pos} ---')
+                  out.append(text[max(0,pos-1200):min(len(text),pos+5200)].replace('\n',' '))
+              calls=[]
+              for m in re.finditer(rf'(?<![A-Za-z0-9_$]){sym}(?![A-Za-z0-9_$])',text):
+                  pos=m.start()
+                  if pos not in defs:
+                      calls.append(pos)
+              out.append('occurrences='+repr(calls[:60]))
+              for pos in calls[:20]:
+                  out.append(f'--- occurrence@{pos} ---')
+                  out.append(text[max(0,pos-900):min(len(text),pos+1800)].replace('\n',' '))
+          Path('control-evidence/control-definitions.txt').write_text('\n'.join(out))
+
+      - name: Upload exact control evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-desktop-vf-wf-control-evidence
+          path: control-evidence/control-definitions.txt
+          if-no-files-found: error
