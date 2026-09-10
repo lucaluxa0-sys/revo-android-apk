@@ -78,8 +78,10 @@ method = r'''
                 return;
             }
             if (String.valueOf(value).contains("clicked")) {
-                new Handler(Looper.getMainLooper()).postDelayed(
-                        () -> Log.e("RevoElolState", bridge.getEngineState()), 12000);
+                Handler h = new Handler(Looper.getMainLooper());
+                h.postDelayed(() -> Log.e("RevoElolState", bridge.getEngineState()), 12000);
+                h.postDelayed(() -> Log.e("RevoElolState", bridge.getEngineState()), 30000);
+                h.postDelayed(() -> Log.e("RevoElolState", bridge.getEngineState()), 45000);
             }
         });
     }
@@ -91,4 +93,4 @@ if stop_marker not in s:
 s = s.replace(stop_marker, method + '\n' + stop_marker, 1)
 
 p.write_text(s)
-print('PASS: instrumented real frontend e_lol row + real Start button gate')
+print('PASS: instrumented real frontend e_lol row + real Start button gate + staged state evidence')
