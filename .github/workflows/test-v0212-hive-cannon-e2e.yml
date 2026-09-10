@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/test-v0212-hive-cannon-e2e.yml'
+      - '.ci/enable_revo_accessibility.py'
       - 'tools/patch-native-v0212-hive-routing.py'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/instrument-v0211-elol-e2e.py'
