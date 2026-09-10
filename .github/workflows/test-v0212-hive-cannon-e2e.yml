@@ -271,7 +271,7 @@ jobs:
             states=[]
             for line in text.splitlines():
               if 'RevoElolState' not in line: continue
-              m=re.search(r'RevoElolState:\s*(\{.*\})\s*$', line)
+              m=re.search(r'RevoElolState(?:\([^)]*\))?:\s*(\{.*\})\s*$', line)
               if m:
                 try: states.append(json.loads(m.group(1)))
                 except Exception: pass
