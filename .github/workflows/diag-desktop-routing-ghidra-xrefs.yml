@@ -34,10 +34,12 @@ jobs:
           echo "Ghidra asset: $GH_URL"
           curl -fL --retry 4 --retry-delay 3 -o /tmp/ghidra.zip "$GH_URL"
           unzip -q /tmp/ghidra.zip -d /tmp/ghidra-download
-          GH_ROOT=$(find /tmp/ghidra-download -maxdepth 2 -type f -path '*/support/analyzeHeadless' -printf '%h/..\n' | head -n1)
-          GH_ROOT=$(realpath "$GH_ROOT")
+          ANALYZE=$(find /tmp/ghidra-download -maxdepth 5 -type f -name analyzeHeadless -path '*/support/*' | head -n1)
+          test -n "$ANALYZE"
+          GH_ROOT=$(realpath "$(dirname "$ANALYZE")/..")
           test -x "$GH_ROOT/support/analyzeHeadless"
           echo "$GH_ROOT" > /tmp/ghidra-root.txt
+          echo "Ghidra root: $GH_ROOT"
           "$GH_ROOT/support/analyzeHeadless" 2>&1 | head -n 8 || true
 
       - name: Write routing xref decompiler script
