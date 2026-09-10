@@ -1,0 +1,137 @@
+name: Decode exact v0.9c patterns dataset
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-patterns-decode.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned v0.9c patterns dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache decoded-patterns
+          curl -fL --retry 4 --retry-delay 2 -o .cache/patterns.bin \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro/v0.9c-hotfix3/datasets/v8/patterns.bin
+          echo 'c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f  .cache/patterns.bin' | sha256sum -c -
+
+      - name: Install exact decode dependencies
+        run: python3 -m pip install --disable-pip-version-check cryptography pymongo
+
+      - name: AES-GCM decrypt then gzip then BSON decode
+        shell: python
+        run: |
+          from pathlib import Path
+          import gzip, hashlib, json
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          import bson
+          from bson import json_util
+
+          src = Path('.cache/patterns.bin').read_bytes()
+          assert hashlib.sha256(src).hexdigest() == 'c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f'
+
+          # Recovered directly from v0.9c's revo_d974a5a2af76dd36:
+          # two 32-byte embedded constants are XORed to form this AES-256 key.
+          key = b'jEV7jmplHcPyxRhzP9mOrId2S7LA8Gbb'
+          nonce_size = 12  # crypto/cipher.NewGCM default NonceSize()
+          nonce = src[:nonce_size]
+          ciphertext_and_tag = src[nonce_size:]
+          compressed = AESGCM(key).decrypt(nonce, ciphertext_and_tag, None)
+          Path('decoded-patterns/decrypted.gzip').write_bytes(compressed)
+          plain = gzip.decompress(compressed)
+          Path('decoded-patterns/patterns.bson').write_bytes(plain)
+
+          docs = bson.decode_all(plain)
+          Path('decoded-patterns/decoded.ejson').write_text(json_util.dumps(docs, indent=2), encoding='utf-8')
+
+          terms = [
+              'blue-cannon', 'goto-cannon', 'pinetree-br', 'Pine Tree Forest',
+              'cannon', 'hive', 'gather', 'field', 'sprinkler', 'vertex', 'route'
+          ]
+          strong = {'blue-cannon', 'goto-cannon', 'pinetree-br', 'Pine Tree Forest'}
+          matches = []
+
+          def walk(v, path='$'):
+              if isinstance(v, dict):
+                  for k, val in v.items():
+                      ks = str(k)
+                      low = ks.lower()
+                      hit = [t for t in terms if t.lower() in low]
+                      if hit:
+                          matches.append({'path': path + '.' + ks, 'kind': 'key', 'terms': hit, 'value_preview': repr(val)[:800]})
+                      walk(val, path + '.' + ks)
+              elif isinstance(v, (list, tuple)):
+                  for i, val in enumerate(v):
+                      walk(val, f'{path}[{i}]')
+              elif isinstance(v, str):
+                  low = v.lower()
+                  hit = [t for t in terms if t.lower() in low]
+                  if hit:
+                      matches.append({'path': path, 'kind': 'value', 'terms': hit, 'value_preview': v[:1600]})
+
+          for i, doc in enumerate(docs):
+              walk(doc, f'$doc[{i}]')
+
+          Path('decoded-patterns/route-hits.json').write_text(json.dumps(matches, indent=2), encoding='utf-8')
+
+          # Capture the nearest enclosing objects for strong route identifiers.
+          strong_objects = []
+          seen = set()
+          def collect(v, path='$'):
+              if isinstance(v, dict):
+                  serialized = json_util.dumps(v)
+                  if any(t.lower() in serialized.lower() for t in strong):
+                      marker = (path, serialized[:4000])
+                      if marker not in seen:
+                          seen.add(marker)
+                          strong_objects.append({'path': path, 'object': v})
+                  for k, val in v.items():
+                      collect(val, path + '.' + str(k))
+              elif isinstance(v, list):
+                  for i, val in enumerate(v):
+                      collect(val, f'{path}[{i}]')
+          for i, doc in enumerate(docs):
+              collect(doc, f'$doc[{i}]')
+          Path('decoded-patterns/strong-route-objects.ejson').write_text(json_util.dumps(strong_objects, indent=2), encoding='utf-8')
+
+          def shape(v, depth=0):
+              if depth >= 4:
+                  return type(v).__name__
+              if isinstance(v, dict):
+                  return {str(k): shape(val, depth+1) for k, val in list(v.items())[:80]}
+              if isinstance(v, list):
+                  return {'type': 'list', 'len': len(v), 'sample': [shape(x, depth+1) for x in v[:5]]}
+              return type(v).__name__
+
+          report = {
+              'encrypted_bytes': len(src),
+              'nonce_hex': nonce.hex(),
+              'decrypted_gzip_bytes': len(compressed),
+              'bson_bytes': len(plain),
+              'document_count': len(docs),
+              'top_level_shapes': [shape(d) for d in docs[:10]],
+              'route_match_count': len(matches),
+              'strong_object_count': len(strong_objects),
+          }
+          Path('decoded-patterns/summary.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          print(json.dumps(report, indent=2))
+          print('\n===== STRONG ROUTE OBJECTS =====')
+          print(json_util.dumps(strong_objects[:80], indent=2)[:120000])
+
+      - name: Upload decoded v0.9c route evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-patterns-decoded
+          path: decoded-patterns/
+          if-no-files-found: error
