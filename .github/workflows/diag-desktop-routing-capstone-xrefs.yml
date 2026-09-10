@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: python3 -m pip install --disable-pip-version-check pefile capstone
 
-      - name: Recover RIP-relative routing string references
+      - name: Recover direct and Go-descriptor routing references
         shell: python
         run: |
           from pathlib import Path
@@ -45,155 +45,199 @@ jobs:
           image_base = int(pe.OPTIONAL_HEADER.ImageBase)
 
           needles = [
-              b'Claimed Hive: %d',
-              b'Travelling To: %s',
-              b'claimhive',
-              b'red-cannon-logged',
-              b'hive-side-check',
-              b'red-cannon',
-              b'gather.nextField',
-              b'gather.useDipper',
-              b'PathingFailure',
-              b'SpawnedOnHivePad',
-              b'CheckForClaimedHive',
-              b'HiveClaimMethod',
-              b'PreferredHiveSlot',
-              b'CurrentGatherField',
-              b'WalkAlign',
-              b'WalkAsync',
-              b'CannonDiscovery',
+              b'Claimed Hive: %d', b'Travelling To: %s', b'claimhive',
+              b'red-cannon-logged', b'hive-side-check', b'red-cannon',
+              b'gather.nextField', b'gather.useDipper', b'PathingFailure',
+              b'SpawnedOnHivePad', b'CheckForClaimedHive', b'HiveClaimMethod',
+              b'PreferredHiveSlot', b'CurrentGatherField', b'WalkAlign',
+              b'WalkAsync', b'CannonDiscovery',
           ]
 
+          sections=[]
+          for s in pe.sections:
+              sections.append({
+                  'name':s.Name.rstrip(b'\0').decode('ascii','replace'),
+                  'raw_start':int(s.PointerToRawData), 'raw_size':int(s.SizeOfRawData),
+                  'rva':int(s.VirtualAddress), 'vsize':int(s.Misc_VirtualSize),
+                  'chars':int(s.Characteristics), 'data':s.get_data(),
+              })
+
           def file_offset_to_rva(off):
-              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:
-                  return off
-              for s in pe.sections:
-                  start = int(s.PointerToRawData)
-                  end = start + int(s.SizeOfRawData)
-                  if start <= off < end:
-                      return int(s.VirtualAddress) + (off - start)
+              if off < pe.OPTIONAL_HEADER.SizeOfHeaders: return off
+              for s in sections:
+                  if s['raw_start'] <= off < s['raw_start'] + s['raw_size']:
+                      return s['rva'] + (off-s['raw_start'])
               return None
 
-          strings = []
-          for needle in needles:
-              pos = 0
-              while True:
-                  off = raw.find(needle, pos)
-                  if off < 0: break
-                  rva = file_offset_to_rva(off)
-                  if rva is not None:
-                      strings.append({
-                          'text': needle.decode('ascii'),
-                          'file_offset': off,
-                          'rva': rva,
-                          'va': image_base + rva,
-                          'length': len(needle),
-                      })
-                  pos = off + 1
+          def section_for_off(off):
+              for s in sections:
+                  if s['raw_start'] <= off < s['raw_start'] + s['raw_size']:
+                      return s['name']
+              return '<headers/overlay>'
 
-          # Runtime-function ranges from .pdata / PE exception directory.
-          funcs = []
+          strings=[]
+          for needle in needles:
+              pos=0
+              while True:
+                  off=raw.find(needle,pos)
+                  if off<0: break
+                  rva=file_offset_to_rva(off)
+                  if rva is not None:
+                      strings.append({'text':needle.decode('ascii'),'file_offset':off,
+                          'rva':rva,'va':image_base+rva,'length':len(needle),
+                          'section':section_for_off(off)})
+                  pos=off+1
+
+          # Windows x64 runtime function boundaries from .pdata.
+          funcs=[]
           try:
               for e in pe.DIRECTORY_ENTRY_EXCEPTION:
-                  b = int(e.struct.BeginAddress)
-                  en = int(e.struct.EndAddress)
-                  if b < en:
-                      funcs.append((b, en))
-          except Exception:
-              pass
-          funcs = sorted(set(funcs))
-          func_starts = [x[0] for x in funcs]
-
+                  b=int(e.struct.BeginAddress); en=int(e.struct.EndAddress)
+                  if b<en: funcs.append((b,en))
+          except Exception: pass
+          funcs=sorted(set(funcs)); func_starts=[x[0] for x in funcs]
           def containing_func(rva):
               if not funcs: return None
-              i = bisect.bisect_right(func_starts, rva) - 1
-              if i >= 0:
-                  b, en = funcs[i]
-                  if b <= rva < en: return (b, en)
+              i=bisect.bisect_right(func_starts,rva)-1
+              if i>=0:
+                  b,en=funcs[i]
+                  if b<=rva<en: return (b,en)
               return None
 
-          md = Cs(CS_ARCH_X86, CS_MODE_64)
-          md.detail = True
-          xrefs = []
-          instructions = {}
-          executable_sections = []
-          for s in pe.sections:
-              if int(s.Characteristics) & 0x20000000:
-                  sec_name = s.Name.rstrip(b'\0').decode('ascii','replace')
-                  sec_rva = int(s.VirtualAddress)
-                  sec_va = image_base + sec_rva
-                  sec_data = s.get_data()
-                  executable_sections.append((sec_name, sec_rva, sec_va, sec_data))
-                  for insn in md.disasm(sec_data, sec_va):
-                      instructions[insn.address] = insn
-                      targets = []
-                      for op in insn.operands:
-                          if op.type == X86_OP_MEM and op.mem.base == X86_REG_RIP:
-                              targets.append(insn.address + insn.size + op.mem.disp)
-                          elif op.type == X86_OP_IMM:
-                              targets.append(int(op.imm) & ((1<<64)-1))
-                      if not targets: continue
-                      for st in strings:
-                          lo = st['va']; hi = lo + st['length']
-                          if any(lo <= t < hi for t in targets):
-                              rva = insn.address - image_base
-                              fr = containing_func(rva)
-                              xrefs.append({
-                                  'string': st['text'],
-                                  'string_rva': st['rva'],
-                                  'string_va': st['va'],
-                                  'insn_va': insn.address,
-                                  'insn_rva': rva,
-                                  'mnemonic': insn.mnemonic,
-                                  'op_str': insn.op_str,
-                                  'function': None if fr is None else {'begin_rva': fr[0], 'end_rva': fr[1], 'size': fr[1]-fr[0]},
-                              })
+          # Build candidate intermediate addresses. Go often materializes a string through
+          # a static {data pointer, length} header or another pointer cell instead of
+          # referencing the raw bytes directly from code.
+          candidates=[]
+          seen_candidates=set()
+          def add_candidate(st, off, kind, detail=''):
+              rva=file_offset_to_rva(off)
+              if rva is None: return
+              key=(st['text'],st['rva'],rva,kind)
+              if key in seen_candidates: return
+              seen_candidates.add(key)
+              candidates.append({'string':st['text'],'string_rva':st['rva'],
+                  'kind':kind,'file_offset':off,'rva':rva,'va':image_base+rva,
+                  'section':section_for_off(off),'detail':detail})
 
-          # Emit targeted disassembly for each unique containing runtime function.
-          unique_funcs = {}
-          for x in xrefs:
-              f = x['function']
-              if f:
-                  unique_funcs[(f['begin_rva'], f['end_rva'])] = f
-
-          def bytes_for_rva(begin, end):
-              for name, sec_rva, sec_va, sec_data in executable_sections:
-                  if sec_rva <= begin < sec_rva + len(sec_data):
-                      a = begin - sec_rva
-                      b = min(len(sec_data), end - sec_rva)
-                      return name, sec_data[a:b], image_base + begin
-              return None, b'', image_base + begin
-
-          lines = []
-          lines.append(f'image_base=0x{image_base:x}')
-          lines.append(f'exception_function_ranges={len(funcs)}')
-          lines.append(f'string_occurrences={len(strings)}')
           for st in strings:
-              lines.append(f"STRING {st['text']!r} file=0x{st['file_offset']:x} rva=0x{st['rva']:x} va=0x{st['va']:x}")
+              # raw bytes are always first-level candidates
+              add_candidate(st, st['file_offset'], 'raw-string')
+              encodings=[('va64',struct.pack('<Q',st['va'])),('rva64',struct.pack('<Q',st['rva'])),
+                         ('rva32',struct.pack('<I',st['rva'] & 0xffffffff))]
+              first_level=[]
+              for enc_name,enc in encodings:
+                  p=0
+                  while True:
+                      off=raw.find(enc,p)
+                      if off<0: break
+                      p=off+1
+                      # Avoid the occurrence being the literal text itself by requiring a mapped cell.
+                      rva=file_offset_to_rva(off)
+                      if rva is None: continue
+                      length_match=False
+                      if off+16<=len(raw) and struct.unpack_from('<Q',raw,off+8)[0]==st['length']:
+                          length_match=True
+                      if off+12<=len(raw) and struct.unpack_from('<I',raw,off+8)[0]==st['length']:
+                          length_match=True
+                      kind='go-string-descriptor' if length_match else 'pointer-cell'
+                      add_candidate(st,off,kind,enc_name + ('+length' if length_match else ''))
+                      first_level.append((off,rva,kind))
+              # one extra pointer layer: global/table -> descriptor/pointer cell
+              for off1,rva1,kind1 in first_level[:400]:
+                  va1=image_base+rva1
+                  for enc_name,enc in [('cell-va64',struct.pack('<Q',va1)),('cell-rva64',struct.pack('<Q',rva1))]:
+                      p=0
+                      hits=0
+                      while True:
+                          off2=raw.find(enc,p)
+                          if off2<0 or hits>=100: break
+                          p=off2+1; hits+=1
+                          add_candidate(st,off2,'pointer-to-'+kind1,enc_name)
+
+          # Map candidate VAs to owning strings. Exact target is preferred; allow targets
+          # into the raw string body only for raw-string candidates.
+          by_exact={}
+          raw_ranges=[]
+          for c in candidates:
+              by_exact.setdefault(c['va'],[]).append(c)
+          for st in strings:
+              raw_ranges.append((st['va'],st['va']+st['length'],st))
+
+          md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
+          executable=[]; xrefs=[]
+          seen_xrefs=set()
+          for s in sections:
+              if not (s['chars'] & 0x20000000): continue
+              executable.append(s)
+              sec_va=image_base+s['rva']
+              for insn in md.disasm(s['data'],sec_va):
+                  targets=[]
+                  for op in insn.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          targets.append(('rip',insn.address+insn.size+op.mem.disp))
+                      elif op.type==X86_OP_IMM:
+                          targets.append(('imm',int(op.imm)&((1<<64)-1)))
+                  if not targets: continue
+                  matched=[]
+                  for mode,t in targets:
+                      for c in by_exact.get(t,[]): matched.append((mode,t,c))
+                      for lo,hi,st in raw_ranges:
+                          if lo<=t<hi:
+                              matched.append((mode,t,{'string':st['text'],'string_rva':st['rva'],
+                                  'kind':'raw-string-body','rva':st['rva'],'va':st['va'],
+                                  'file_offset':st['file_offset'],'section':st['section'],'detail':''}))
+                  for mode,t,c in matched:
+                      rva=insn.address-image_base; fr=containing_func(rva)
+                      key=(c['string'],c['string_rva'],c['kind'],c['rva'],rva)
+                      if key in seen_xrefs: continue
+                      seen_xrefs.add(key)
+                      xrefs.append({'string':c['string'],'string_rva':c['string_rva'],
+                          'via_kind':c['kind'],'via_rva':c['rva'],'via_section':c.get('section',''),
+                          'target_mode':mode,'insn_va':insn.address,'insn_rva':rva,
+                          'mnemonic':insn.mnemonic,'op_str':insn.op_str,
+                          'function':None if fr is None else {'begin_rva':fr[0],'end_rva':fr[1],'size':fr[1]-fr[0]}})
+
+          unique_funcs={}
+          for x in xrefs:
+              f=x['function']
+              if f: unique_funcs[(f['begin_rva'],f['end_rva'])]=f
+
+          def bytes_for_rva(begin,end):
+              for s in executable:
+                  if s['rva']<=begin<s['rva']+len(s['data']):
+                      a=begin-s['rva']; b=min(len(s['data']),end-s['rva'])
+                      return s['name'],s['data'][a:b],image_base+begin
+              return None,b'',image_base+begin
+
+          lines=[f'image_base=0x{image_base:x}',f'exception_function_ranges={len(funcs)}',
+                 f'string_occurrences={len(strings)}',f'candidate_cells={len(candidates)}']
+          for st in strings:
+              lines.append(f"STRING {st['text']!r} section={st['section']} file=0x{st['file_offset']:x} rva=0x{st['rva']:x}")
+          interesting=[c for c in candidates if c['kind']!='raw-string']
+          lines.append(f'indirect_candidates={len(interesting)}')
+          for c in interesting[:4000]:
+              lines.append(f"CANDIDATE {c['string']!r} kind={c['kind']} section={c['section']} rva=0x{c['rva']:x} detail={c['detail']}")
           lines.append(f'xrefs={len(xrefs)}')
           for x in xrefs:
-              f = x['function']
-              fs = '<none>' if not f else f"0x{f['begin_rva']:x}-0x{f['end_rva']:x} size={f['size']}"
-              lines.append(f"XREF {x['string']!r} insn_rva=0x{x['insn_rva']:x} {x['mnemonic']} {x['op_str']} func={fs}")
+              f=x['function']; fs='<none>' if not f else f"0x{f['begin_rva']:x}-0x{f['end_rva']:x} size={f['size']}"
+              lines.append(f"XREF {x['string']!r} via={x['via_kind']}@0x{x['via_rva']:x} insn=0x{x['insn_rva']:x} {x['mnemonic']} {x['op_str']} func={fs}")
 
-          for (begin,end), f in sorted(unique_funcs.items()):
-              name, data, va = bytes_for_rva(begin,end)
-              lines.append('')
-              lines.append(f'===== RUNTIME FUNCTION rva=0x{begin:x}-0x{end:x} size={end-begin} section={name} =====')
-              refs_here = [x for x in xrefs if x['function'] and x['function']['begin_rva']==begin and x['function']['end_rva']==end]
-              lines.append('REF_STRINGS=' + ', '.join(sorted(set(x['string'] for x in refs_here))))
+          for (begin,end),f in sorted(unique_funcs.items()):
+              name,data,va=bytes_for_rva(begin,end)
+              refs=[x for x in xrefs if x['function'] and x['function']['begin_rva']==begin and x['function']['end_rva']==end]
+              lines += ['',f'===== RUNTIME FUNCTION rva=0x{begin:x}-0x{end:x} size={end-begin} section={name} =====',
+                        'REF_STRINGS='+', '.join(sorted(set(x['string'] for x in refs)))]
               count=0
-              for insn in md.disasm(data, va):
-                  marker = '  <XREF>' if any(x['insn_va']==insn.address for x in refs_here) else ''
+              for insn in md.disasm(data,va):
+                  marker='  <XREF>' if any(x['insn_va']==insn.address for x in refs) else ''
                   lines.append(f"0x{insn.address-image_base:08x}: {insn.mnemonic:8s} {insn.op_str}{marker}")
-                  count += 1
-                  if count >= 4000:
-                      lines.append('... function disassembly truncated at 4000 instructions ...')
-                      break
+                  count+=1
+                  if count>=4000:
+                      lines.append('... function disassembly truncated at 4000 instructions ...'); break
 
-          Path('capstone-routing/summary.txt').write_text('\n'.join(lines), encoding='utf-8')
-          Path('capstone-routing/xrefs.json').write_text(json.dumps({'strings':strings,'xrefs':xrefs},indent=2), encoding='utf-8')
-          print('\n'.join(lines[:1200]))
+          Path('capstone-routing/summary.txt').write_text('\n'.join(lines),encoding='utf-8')
+          Path('capstone-routing/xrefs.json').write_text(json.dumps({'strings':strings,'candidates':candidates,'xrefs':xrefs},indent=2),encoding='utf-8')
+          print('\n'.join(lines[:1600]))
 
       - name: Upload Capstone routing evidence
         uses: actions/upload-artifact@v4
