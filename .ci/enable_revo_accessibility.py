@@ -9,6 +9,7 @@ SERVICE_CLASS = "com.revolution.android.RevoAccessibilityService"
 SERVICE_COMPONENT = f"{PACKAGE}/{SERVICE_CLASS}"
 SHORT_COMPONENT = f"{PACKAGE}/.RevoAccessibilityService"
 BIND_ACCESSIBILITY_OP = "android:bind_accessibility_service"
+SETTINGS_USER = "0"
 ARTIFACT_DIR = Path("emulator-artifacts")
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +51,9 @@ def component_present(text):
 
 
 def read_setting(name):
-    result = shell("settings", "get", "secure", name, check=False)
+    result = shell(
+        "settings", "--user", SETTINGS_USER, "get", "secure", name, check=False
+    )
     return (result.stdout or "").strip()
 
 
@@ -62,6 +65,15 @@ def parse_enabled_setting(raw):
 
 def enabled_services():
     return parse_enabled_setting(read_setting("enabled_accessibility_services"))
+
+
+def secure_setting_is_exact(services, master):
+    entries = parse_enabled_setting(services)
+    return (
+        master == "1"
+        and len(entries) == 1
+        and component_present(entries[0])
+    )
 
 
 def verify_service_declared():
@@ -110,17 +122,25 @@ def grant_bind_accessibility_appop():
     print("PASS prerequisite: BIND_ACCESSIBILITY_SERVICE AppOp is allowed", flush=True)
 
 
-def set_service_enabled():
-    grant_bind_accessibility_appop()
-
+def write_secure_accessibility_state(reason):
     current = enabled_services()
-    print(f"Existing enabled accessibility services: {current!r}", flush=True)
+    print(
+        f"Writing Accessibility secure state reason={reason} existing={current!r}",
+        flush=True,
+    )
     if not any(component_present(entry) for entry in current):
         current.append(SERVICE_COMPONENT)
     value = ":".join(current)
 
     put_services = shell(
-        "settings", "put", "secure", "enabled_accessibility_services", value, check=False
+        "settings",
+        "--user",
+        SETTINGS_USER,
+        "put",
+        "secure",
+        "enabled_accessibility_services",
+        value,
+        check=False,
     )
     if put_services.returncode != 0:
         raise RuntimeError(
@@ -129,13 +149,34 @@ def set_service_enabled():
         )
 
     put_master = shell(
-        "settings", "put", "secure", "accessibility_enabled", "1", check=False
+        "settings",
+        "--user",
+        SETTINGS_USER,
+        "put",
+        "secure",
+        "accessibility_enabled",
+        "1",
+        check=False,
     )
     if put_master.returncode != 0:
         raise RuntimeError(
             "failed to set accessibility_enabled=1 via emulator shell: "
             + (put_master.stdout or "")
         )
+
+    services_after = read_setting("enabled_accessibility_services")
+    master_after = read_setting("accessibility_enabled")
+    print(
+        f"Accessibility secure readback reason={reason} "
+        f"services={services_after!r} master={master_after!r}",
+        flush=True,
+    )
+    return services_after, master_after
+
+
+def set_service_enabled():
+    grant_bind_accessibility_appop()
+    write_secure_accessibility_state("initial")
 
 
 def section(text, heading, next_headings):
@@ -214,16 +255,26 @@ def wait_for_bound_service(timeout_s=20.0):
     while time.monotonic() < deadline:
         services = read_setting("enabled_accessibility_services")
         master = read_setting("accessibility_enabled")
+        setting_ok = secure_setting_is_exact(services, master)
+
+        # Android's AccessibilityManager can sanitize secure settings while the
+        # package/service registration is settling after install. The failed API35
+        # run demonstrated that a one-shot write can regress to null/0. Repair only
+        # observed setting drift; never rewrite while a valid service is binding.
+        if not setting_ok:
+            print(
+                f"A11Y secure-state drift probe={attempt}; re-arming exact component",
+                flush=True,
+            )
+            services, master = write_secure_accessibility_state(
+                f"probe-{attempt}-readback-drift"
+            )
+            setting_ok = secure_setting_is_exact(services, master)
+
         accessibility_dump = shell("dumpsys", "accessibility", check=False).stdout or ""
         last = (services, master, accessibility_dump)
         write_state_artifacts(attempt, services, master, accessibility_dump)
 
-        entries = parse_enabled_setting(services)
-        setting_ok = (
-            master == "1"
-            and len(entries) == 1
-            and component_present(entries[0])
-        )
         manager_exact_clean = accessibility_manager_reports_exact_clean_binding(
             accessibility_dump, services
         )
