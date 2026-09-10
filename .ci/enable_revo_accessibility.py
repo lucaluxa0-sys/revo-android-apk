@@ -218,11 +218,19 @@ def crashed_section(text):
     return section(text, "Crashed services", ("Client list", "User state"))
 
 
+def collection_section_is_empty(value):
+    # dumpsys accessibility prints these sets as {} when settled. During the
+    # API35 race it printed the component as {{package/class}} while Bound services
+    # was already populated, so merely searching for Service[...] was insufficient.
+    return re.sub(r"\s+", "", value or "") == "{}"
+
+
 def accessibility_manager_reports_exact_clean_binding(accessibility_dump, settings_services):
     # The API-35 Bound-services section is label-only, so correlate it with the
     # exact enabled component instead of asking ActivityManager for a service record.
-    # This CI emulator starts clean: requiring exactly one enabled component and
-    # exactly one bound Service[...] makes the identity mapping unambiguous.
+    # This CI emulator starts clean: require one exact enabled component, one bound
+    # service, no in-progress/crashed binding, and the gesture input filter that the
+    # real macro needs before declaring Accessibility usable.
     entries = parse_enabled_setting(settings_services)
     if len(entries) != 1 or not component_present(entries[0]):
         return False
@@ -230,9 +238,15 @@ def accessibility_manager_reports_exact_clean_binding(accessibility_dump, settin
         return False
     if len(re.findall(r"\bService\s*\[", bound_section(accessibility_dump))) != 1:
         return False
-    if re.search(r"\bService\s*\[", binding_section(accessibility_dump)):
+    if not collection_section_is_empty(binding_section(accessibility_dump)):
         return False
-    if re.search(r"\bService\s*\[", crashed_section(accessibility_dump)):
+    if not collection_section_is_empty(crashed_section(accessibility_dump)):
+        return False
+    if not re.search(
+        r"Enabled features of Display\s*\[\s*0\s*\]\s*=\s*\[[^\]]*\bMotionEventInjector\b",
+        accessibility_dump,
+        re.I,
+    ):
         return False
     return True
 
@@ -278,9 +292,14 @@ def wait_for_bound_service(timeout_s=20.0):
         manager_exact_clean = accessibility_manager_reports_exact_clean_binding(
             accessibility_dump, services
         )
+        binding = re.sub(r"\s+", " ", binding_section(accessibility_dump)).strip()
+        crashed = re.sub(r"\s+", " ", crashed_section(accessibility_dump)).strip()
+        has_motion_injector = "MotionEventInjector" in accessibility_dump
         print(
             f"A11Y probe={attempt} setting_ok={setting_ok} "
             f"manager_exact_clean={manager_exact_clean} "
+            f"binding={binding!r} crashed={crashed!r} "
+            f"motionInjector={has_motion_injector} "
             f"services={services!r} master={master!r}",
             flush=True,
         )
@@ -298,9 +317,9 @@ def wait_for_bound_service(timeout_s=20.0):
         if re.search(r"RevoAccessibility|AccessibilityManager|com\.revolution\.android", line, re.I):
             print(line, flush=True)
     raise RuntimeError(
-        "Revolution Accessibility did not produce one exact enabled component plus "
-        f"one clean bound Accessibility service within {timeout_s:.0f}s; "
-        f"services={services!r} master={master!r}"
+        "Revolution Accessibility did not produce one exact enabled component, "
+        "one settled bound service, and the gesture input filter within "
+        f"{timeout_s:.0f}s; services={services!r} master={master!r}"
     )
 
 
@@ -308,12 +327,12 @@ def main():
     # CI setup only. On the clean Android emulator, fail closed unless the installed
     # package declares the exact service, its bind AppOp is explicitly allowed,
     # secure settings enable only that component, and AccessibilityManager reports
-    # exactly one clean bound service for it.
+    # a fully settled service with the gesture input path active.
     verify_service_declared()
     set_service_enabled()
     wait_for_bound_service()
     print(
-        "PASS: Revolution Accessibility exact component is enabled and cleanly bound",
+        "PASS: Revolution Accessibility exact component is enabled and fully settled",
         flush=True,
     )
     return 0
