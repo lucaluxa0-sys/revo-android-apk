@@ -1,0 +1,121 @@
+name: Compact desktop routing and control probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-routing-controls-compact.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore source and pinned desktop frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          mkdir -p .cache /tmp/revo-www compact-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe /tmp/revo-www
+
+      - name: Build compact control-strip evidence
+        shell: python
+        run: |
+          from pathlib import Path
+          import re, json
+          js = next(Path('/tmp/revo-www').rglob('index-*.js'))
+          text = js.read_text(errors='replace')
+          out=[]
+          out.append(f'bundle={js.name} bytes={len(text)}')
+          # Windows around literal UI labels where Start/Pause/Stop cluster.
+          starts=list(re.finditer(r'(["\'])Start\1', text))
+          candidates=[]
+          for m in starts:
+              a=max(0,m.start()-5000); b=min(len(text),m.end()+5000)
+              s=text[a:b]
+              score=sum(x in s for x in ['Pause','Stop','Jo(', 'onClick', 'type:"dots"', 'type:"bars"'])
+              if 'Pause' in s and 'Stop' in s:
+                  candidates.append((score,m.start(),s))
+          candidates=sorted(candidates, reverse=True)[:5]
+          out.append(f'cluster_candidates={len(candidates)}')
+          for idx,(score,pos,s) in enumerate(candidates,1):
+              # Reduce to +-1800 around Start inside candidate.
+              rel=s.find('Start')
+              q=s[max(0,rel-1800):min(len(s),rel+3000)]
+              out.append(f'\n=== CONTROL_CLUSTER_{idx} score={score} absolute={pos} ===')
+              out.append(q.replace('\n',' '))
+              for marker in ['type:"dots"','type:"bars"','…','ellipsis','menu','MoreHorizontal','DotsHorizontal','GripHorizontal']:
+                  out.append(f'marker[{marker}]={marker in s}')
+          # Standalone loader/menu markers nearest any Start/Pause/Stop cluster.
+          markers=[]
+          for pat,label in [(r'type:"dots"','loader-dots'),(r'…','unicode-ellipsis'),(r'ellipsis','ellipsis-word')]:
+              for m in re.finditer(pat,text,re.I):
+                  near=text[max(0,m.start()-4500):min(len(text),m.end()+4500)]
+                  if all(x in near for x in ['Start','Pause','Stop']):
+                      markers.append((label,m.start(),near[max(0,4500-900):min(len(near),4500+1200)].replace('\n',' ')))
+          out.append(f'\nnearby_marker_count={len(markers)}')
+          for label,pos,s in markers[:20]:
+              out.append(f'=== MARKER {label} pos={pos} ===\n{s}')
+          Path('compact-evidence/control-summary.txt').write_text('\n'.join(out))
+
+      - name: Build compact routing evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '=== GO BUILD METADATA ==='
+            go version -m .cache/RevolutionMacro.exe || true
+            echo
+            echo '=== ROUTING-RELATED GO SYMBOLS ==='
+            go tool nm .cache/RevolutionMacro.exe 2>/dev/null | \
+              grep -Ei 'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|character' | \
+              sed -E 's/^[[:space:]]+//' | sort -u | head -n 500 || true
+            echo
+            echo '=== ROUTING-RELATED PRINTABLE STRINGS ==='
+            strings -a -n 5 .cache/RevolutionMacro.exe | \
+              grep -Ei 'hive claim|preferred hive|claim hive|claim.*hive|walk.*hive|hive.*walk|route.*field|field.*route|travel.*field|field.*travel|go.*field|field.*gather|red cannon|reset character|spawn|join.*hive|pathing|routing|move.*field|field.*move|cannon' | \
+              awk '!seen[$0]++' | head -n 700 || true
+          } > compact-evidence/routing-summary.txt
+
+      - name: Build frontend API call evidence around routing terms
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          js=next(Path('/tmp/revo-www').rglob('index-*.js'))
+          text=js.read_text(errors='replace')
+          terms=['hive','claim','field','gather','walk','cannon','spawn','convert','reset']
+          lines=[]
+          seen=set()
+          for term in terms:
+              for m in re.finditer(term,text,re.I):
+                  a=max(0,m.start()-450); b=min(len(text),m.end()+650)
+                  s=text[a:b].replace('\n',' ')
+                  if ('window.go' in s or 'go.' in s or 'Jo(' in s or 'Bo(' in s or 'cmd.' in s) and s not in seen:
+                      seen.add(s); lines.append(f'=== {term}@{m.start()} ===\n{s}')
+                      if len(lines)>=100: break
+              if len(lines)>=100: break
+          Path('compact-evidence/frontend-routing-summary.txt').write_text('\n'.join(lines))
+
+      - name: Print compact evidence
+        shell: bash
+        run: |
+          for f in compact-evidence/*.txt; do echo "===== $f ====="; cat "$f"; done
+
+      - name: Upload compact evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-desktop-routing-controls-compact
+          path: compact-evidence/
+          if-no-files-found: error
