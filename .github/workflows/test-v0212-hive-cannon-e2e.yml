@@ -271,11 +271,18 @@ jobs:
             adb shell am start -W -n com.revolution.android/.MainActivity > emulator-artifacts/revo-return.txt
             sleep 8
             adb logcat -c
+            adb logcat -v time > emulator-artifacts/logcat.txt 2>&1 &
+            LOGCAT_PID=$!
+            trap 'kill "$LOGCAT_PID" 2>/dev/null || true; wait "$LOGCAT_PID" 2>/dev/null || true' EXIT
+            sleep 1
             adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/start-broadcast.txt
             sleep 52
             adb exec-out screencap -p > emulator-artifacts/final.png
             adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
-            adb logcat -d -v time > emulator-artifacts/logcat.txt
+            kill "$LOGCAT_PID" 2>/dev/null || true
+            wait "$LOGCAT_PID" 2>/dev/null || true
+            trap - EXIT
+            adb logcat -d -v time > emulator-artifacts/logcat-ring.txt || true
             grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoPreGatherRouter|RevoGatherAdapter|RevoMovementEvidence|FakeRobloxHive' emulator-artifacts/logcat.txt > emulator-artifacts/route-flow.txt || true
             cat emulator-artifacts/route-flow.txt
             python3 .ci/verify_v0212_hive_cannon_e2e.py
