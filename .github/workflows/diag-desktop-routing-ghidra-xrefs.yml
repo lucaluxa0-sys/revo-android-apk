@@ -1,0 +1,149 @@
+name: Recover desktop routing functions with Ghidra xrefs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-routing-ghidra-xrefs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download exact pinned Revolution and current Ghidra release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache ghidra-scripts routing-ghidra /tmp/ghidra-download /tmp/ghidra-project
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          GH_URL=$(curl -fsSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest | jq -r '.assets[] | select(.name|endswith(".zip")) | .browser_download_url' | head -n1)
+          test -n "$GH_URL"
+          echo "Ghidra asset: $GH_URL"
+          curl -fL --retry 4 --retry-delay 3 -o /tmp/ghidra.zip "$GH_URL"
+          unzip -q /tmp/ghidra.zip -d /tmp/ghidra-download
+          GH_ROOT=$(find /tmp/ghidra-download -maxdepth 2 -type f -path '*/support/analyzeHeadless' -printf '%h/..\n' | head -n1)
+          GH_ROOT=$(realpath "$GH_ROOT")
+          test -x "$GH_ROOT/support/analyzeHeadless"
+          echo "$GH_ROOT" > /tmp/ghidra-root.txt
+          "$GH_ROOT/support/analyzeHeadless" 2>&1 | head -n 8 || true
+
+      - name: Write routing xref decompiler script
+        shell: bash
+        run: |
+          cat > ghidra-scripts/RecoverRouting.java <<'EOF'
+          import ghidra.app.script.GhidraScript;
+          import ghidra.app.decompiler.DecompInterface;
+          import ghidra.app.decompiler.DecompileResults;
+          import ghidra.program.model.listing.Data;
+          import ghidra.program.model.listing.DataIterator;
+          import ghidra.program.model.listing.Function;
+          import ghidra.program.model.symbol.Reference;
+          import ghidra.program.model.symbol.ReferenceIterator;
+          import java.util.LinkedHashMap;
+          import java.util.Map;
+
+          public class RecoverRouting extends GhidraScript {
+              @Override
+              public void run() throws Exception {
+                  String[] needles = new String[]{
+                      "Claimed Hive: %d",
+                      "Travelling To: %s",
+                      "claimhive",
+                      "red-cannon-logged",
+                      "hive-side-check",
+                      "red-cannon",
+                      "gather.nextField",
+                      "gather.useDipper",
+                      "PathingFailure",
+                      "SpawnedOnHivePad",
+                      "CheckForClaimedHive",
+                      "HiveClaimMethod",
+                      "PreferredHiveSlot",
+                      "CurrentGatherField",
+                      "WalkAlign",
+                      "WalkAsync",
+                      "CannonDiscovery"
+                  };
+                  Map<Long, Function> funcs = new LinkedHashMap<>();
+                  DataIterator it = currentProgram.getListing().getDefinedData(true);
+                  while (it.hasNext() && !monitor.isCancelled()) {
+                      Data d = it.next();
+                      Object v = d.getValue();
+                      if (!(v instanceof String)) continue;
+                      String s = (String)v;
+                      boolean match = false;
+                      for (String n : needles) {
+                          if (s.contains(n)) { match = true; break; }
+                      }
+                      if (!match) continue;
+                      println("STRING @" + d.getAddress() + " = " + s.replace("\n", "\\n"));
+                      ReferenceIterator refs = currentProgram.getReferenceManager().getReferencesTo(d.getAddress());
+                      int count = 0;
+                      while (refs.hasNext()) {
+                          Reference r = refs.next();
+                          count++;
+                          Function f = currentProgram.getFunctionManager().getFunctionContaining(r.getFromAddress());
+                          println("  XREF from=" + r.getFromAddress() + " function=" + (f == null ? "<none>" : f.getName()) + " entry=" + (f == null ? "<none>" : f.getEntryPoint()));
+                          if (f != null) funcs.put(f.getEntryPoint().getOffset(), f);
+                      }
+                      println("  XREF_COUNT=" + count);
+                  }
+                  println("RECOVERED_FUNCTION_COUNT=" + funcs.size());
+                  DecompInterface decomp = new DecompInterface();
+                  decomp.openProgram(currentProgram);
+                  for (Function f : funcs.values()) {
+                      if (monitor.isCancelled()) break;
+                      println("\n===== FUNCTION " + f.getName() + " @" + f.getEntryPoint() + " =====");
+                      DecompileResults res = decomp.decompileFunction(f, 90, monitor);
+                      if (res != null && res.decompileCompleted() && res.getDecompiledFunction() != null) {
+                          println(res.getDecompiledFunction().getC());
+                      } else {
+                          println("DECOMPILE_FAILED: " + (res == null ? "null result" : res.getErrorMessage()));
+                      }
+                  }
+                  decomp.dispose();
+              }
+          }
+          EOF
+
+      - name: Analyze and decompile routing string xrefs
+        shell: bash
+        run: |
+          set +e
+          GH_ROOT=$(cat /tmp/ghidra-root.txt)
+          "$GH_ROOT/support/analyzeHeadless" /tmp/ghidra-project RevolutionRouting \
+            -import "$GITHUB_WORKSPACE/.cache/RevolutionMacro.exe" \
+            -overwrite \
+            -analysisTimeoutPerFile 900 \
+            -scriptPath "$GITHUB_WORKSPACE/ghidra-scripts" \
+            -postScript RecoverRouting.java \
+            > routing-ghidra/analysis.txt 2>&1
+          rc=$?
+          echo "ghidra_exit=$rc" | tee routing-ghidra/status.txt
+          grep -E 'STRING @|XREF|RECOVERED_FUNCTION_COUNT|===== FUNCTION|DECOMPILE_FAILED' routing-ghidra/analysis.txt | head -n 1200 > routing-ghidra/summary.txt || true
+          echo '===== GHIDRA SUMMARY ====='
+          cat routing-ghidra/summary.txt
+          echo '===== GHIDRA LOG TAIL ====='
+          tail -n 120 routing-ghidra/analysis.txt
+          exit 0
+
+      - name: Upload Ghidra routing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-desktop-routing-ghidra-xrefs
+          path: routing-ghidra/
+          if-no-files-found: error
