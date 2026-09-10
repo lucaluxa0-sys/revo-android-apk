@@ -262,7 +262,9 @@ def binding_section(text):
 
 
 def crashed_section(text):
-    return section(text, "Crashed services", ("Client list", "User state"))
+    # Android 15 prints the following heading as "Client list info:".
+    # Keep the older spelling too so the parser remains compatible with both forms.
+    return section(text, "Crashed services", ("Client list info", "Client list", "User state"))
 
 
 def collection_section_is_empty(value):
