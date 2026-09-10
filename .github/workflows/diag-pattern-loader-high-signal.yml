@@ -1,0 +1,203 @@
+name: Recover high-signal Revolution pattern loader evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-pattern-loader-high-signal.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned desktop binary and v8 patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache high-signal
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          curl -fL --retry 4 --retry-delay 2 -o .cache/patterns.bin \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro/v0.9c-hotfix3/datasets/v8/patterns.bin
+          sha256sum .cache/patterns.bin | tee high-signal/patterns-sha256.txt
+
+      - name: Install disassembly helpers
+        shell: bash
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Recover loader names, format evidence, and high-signal xrefs
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, collections, json, math, re, zlib, gzip, bz2, lzma
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pdata=Path('.cache/patterns.bin').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics),data=s.get_data()))
+          def off2rva(off):
+              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:return off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']:return s['rva']+off-s['raw']
+              return None
+          funcs=[]
+          try:
+              for e in pe.DIRECTORY_ENTRY_EXCEPTION:
+                  b=int(e.struct.BeginAddress); en=int(e.struct.EndAddress)
+                  if b<en: funcs.append((b,en))
+          except Exception: pass
+          funcs=sorted(set(funcs)); starts=[b for b,_ in funcs]
+          def containing(rva):
+              i=bisect.bisect_right(starts,rva)-1
+              return funcs[i] if i>=0 and funcs[i][0]<=rva<funcs[i][1] else None
+
+          printable=[]
+          for m in re.finditer(rb'[\x20-\x7e]{4,}',raw):
+              printable.append((m.start(),m.group().decode('ascii','replace')))
+
+          # Exact app-specific strings discovered by the previous broad probe.
+          needles=[
+              'patterns.bin','patterns/.git/patterns.bin.embedded-v%d','pattern_path',
+              'failed to decompress patterns','failed to read decompressed data',
+              'Pattern Version: %d (Count: %d)','failed to execute pattern: %v',
+              'Failed to execute pattern %s: %v','Failed to analyze pattern %s: %v',
+              'failed to analyze pattern %s: %v','error calling Walk function: %v',
+              'failed to execute pattern: %v','claiming_hive','spawn-aligned','check_hive_%s',
+              'Moving To: %v','Navigating to','Travelling To: %s','Claimed Hive: %d',
+          ]
+          anchors=[]
+          for text in needles:
+              n=text.encode()
+              p=0
+              while True:
+                  off=raw.find(n,p)
+                  if off<0:break
+                  rva=off2rva(off)
+                  if rva is not None:anchors.append(dict(text=text,off=off,rva=rva,va=base+rva,length=len(n)))
+                  p=off+1
+
+          # Preserve package/function-name strings that survived stripping.
+          name_terms=re.compile(r'pattern|route|routing|hive|walk|gather|cannon|navigation|spawn',re.I)
+          app_names=[]
+          for off,s in printable:
+              if 'github.com/nosyliam/revolution' in s and name_terms.search(s):
+                  app_names.append((off,s))
+          Path('high-signal/revolution-function-name-strings.txt').write_text('\n'.join(f'0x{o:x}: {s}' for o,s in app_names),encoding='utf-8')
+
+          # Identify compression/serialization packages actually linked in this binary.
+          codec_terms=['compress/zlib','compress/flate','compress/gzip','gzip.NewReader','zlib.NewReader','flate.NewReader',
+                       'andybalholm/brotli','brotli','snappy','golang/snappy','pierrec/lz4','lz4','klauspost/compress',
+                       'zstd','bzip2','ulikunitz/xz','xz.NewReader','s2','msgpack','cbor','encoding/gob','gob.NewDecoder',
+                       'encoding/json.Unmarshal','json.Unmarshal','crypto/aes.NewCipher','crypto/cipher.NewGCM',
+                       'crypto/cipher.NewCTR','crypto/cipher.NewCBCDecrypter']
+          codec=[]
+          for term in codec_terms:
+              hs=[(o,s) for o,s in printable if term.lower() in s.lower()]
+              codec.append(f'===== {term} count={len(hs)} =====')
+              codec.extend(f'0x{o:x}: {s[:800]}' for o,s in hs[:100])
+          Path('high-signal/codec-symbols.txt').write_text('\n'.join(codec),encoding='utf-8')
+
+          # Directly test common non-encrypted formats, including raw DEFLATE with short header skips.
+          tests=[]
+          simple=[('zlib',lambda b:zlib.decompress(b)),('raw-deflate',lambda b:zlib.decompress(b,-15)),
+                  ('gzip',lambda b:gzip.decompress(b)),('bz2',lambda b:bz2.decompress(b)),('lzma/xz',lambda b:lzma.decompress(b))]
+          for name,fn in simple:
+              try:
+                  out=fn(pdata); tests.append(f'{name}: OK len={len(out)} head={out[:80]!r}')
+              except Exception as e: tests.append(f'{name}: FAIL {type(e).__name__}: {e}')
+          for wbits in (15,-15,31,47):
+              ok=[]
+              for off in range(65):
+                  try:
+                      out=zlib.decompress(pdata[off:],wbits); ok.append((off,len(out),out[:32].hex()))
+                  except Exception: pass
+              tests.append(f'zlib_wbits={wbits} offsets_0_64={ok}')
+          counts=collections.Counter(pdata)
+          ent=-sum((n/len(pdata))*math.log2(n/len(pdata)) for n in counts.values())
+          tests.append(f'entropy={ent:.8f} size={len(pdata)} head96={pdata[:96].hex()}')
+          Path('high-signal/format-tests.txt').write_text('\n'.join(tests),encoding='utf-8')
+
+          md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
+          code=[]
+          for s in sections:
+              if not (s['chars']&0x20000000):continue
+              for ins in md.disasm(s['data'],base+s['rva']):
+                  targets=[]
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          targets.append(('rip',ins.address+ins.size+op.mem.disp))
+                      elif op.type==X86_OP_IMM:
+                          v=int(op.imm)&((1<<64)-1)
+                          if base<=v<base+int(pe.OPTIONAL_HEADER.SizeOfImage):targets.append(('imm',v))
+                  if targets:code.append(dict(rva=ins.address-base,va=ins.address,mn=ins.mnemonic,op=ins.op_str,targets=targets))
+
+          exact=[]; near=[]
+          for a in anchors:
+              for ci in code:
+                  for mode,t in ci['targets']:
+                      d=t-a['va']
+                      if 0<=d<a['length']:
+                          exact.append(dict(anchor=a['text'],anchor_rva=a['rva'],distance=d,mode=mode,insn_rva=ci['rva'],mn=ci['mn'],op=ci['op'],function=containing(ci['rva'])))
+                      if abs(d)<=768:
+                          near.append(dict(anchor=a['text'],anchor_rva=a['rva'],distance=d,target_rva=t-base,mode=mode,insn_rva=ci['rva'],mn=ci['mn'],op=ci['op'],function=containing(ci['rva'])))
+          support={}
+          for h in near:
+              if h['function']:
+                  support.setdefault(tuple(h['function']),set()).add(h['anchor'])
+          # Require at least two app-specific anchors, not generic crypto package names.
+          candidates={f:sorted(v) for f,v in support.items() if len(v)>=2}
+
+          def func_data(b,en):
+              for s in sections:
+                  if (s['chars']&0x20000000) and s['rva']<=b<s['rva']+len(s['data']):
+                      a=b-s['rva']; z=min(len(s['data']),en-s['rva'])
+                      return s['name'],s['data'][a:z],base+b
+              return '<none>',b'',base+b
+
+          lines=[f'image_base=0x{base:x}',f'anchors={len(anchors)}',f'exact={len(exact)}',f'near={len(near)}',f'app_name_strings={len(app_names)}']
+          for a in anchors: lines.append(f"ANCHOR {a['text']!r} off=0x{a['off']:x} rva=0x{a['rva']:x}")
+          lines.append('===== EXACT XREFS =====')
+          for x in exact:lines.append(json.dumps(x,sort_keys=True))
+          lines.append('===== MULTI APP-ANCHOR FUNCTIONS =====')
+          for f,names in sorted(candidates.items()):lines.append(f'FUNC 0x{f[0]:x}-0x{f[1]:x} size={f[1]-f[0]} anchors={names}')
+          lines.append('===== NEAREST REFS =====')
+          for a in anchors:
+              hs=sorted([h for h in near if h['anchor_rva']==a['rva']],key=lambda x:(abs(x['distance']),x['insn_rva']))[:25]
+              lines.append(f"-- {a['text']!r}@0x{a['rva']:x} --")
+              for h in hs:lines.append(json.dumps(h,sort_keys=True))
+          for (b,en),names in sorted(candidates.items()):
+              sec,data,va=func_data(b,en)
+              lines += ['',f'===== CANDIDATE 0x{b:x}-0x{en:x} section={sec} anchors={names} =====']
+              for i,ins in enumerate(md.disasm(data,va)):
+                  if i>=3000: lines.append('... truncated ...');break
+                  lines.append(f"0x{ins.address-base:08x}: {ins.mnemonic:8s} {ins.op_str}")
+          Path('high-signal/xrefs.txt').write_text('\n'.join(lines),encoding='utf-8')
+          Path('high-signal/xrefs.json').write_text(json.dumps(dict(anchors=anchors,exact=exact,near=near,candidates={f'{k[0]:x}-{k[1]:x}':v for k,v in candidates.items()},app_names=app_names),indent=2),encoding='utf-8')
+
+          print('\n'.join(tests))
+          print('APP_NAME_STRINGS',len(app_names))
+          for x in app_names[:500]:print(f'0x{x[0]:x}: {x[1]}')
+          print('EXACT_XREFS',len(exact),'CANDIDATES',len(candidates))
+          for f,names in sorted(candidates.items()):print(f'FUNC 0x{f[0]:x}-0x{f[1]:x} {names}')
+
+      - name: Upload high-signal evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-pattern-loader-high-signal
+          path: high-signal/
+          if-no-files-found: error
