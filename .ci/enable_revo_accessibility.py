@@ -174,6 +174,53 @@ def write_secure_accessibility_state(reason):
     return services_after, master_after
 
 
+def write_secure_accessibility_disabled_state(reason):
+    print(f"Disabling Accessibility secure state reason={reason}", flush=True)
+    put_master = shell(
+        "settings",
+        "--user",
+        SETTINGS_USER,
+        "put",
+        "secure",
+        "accessibility_enabled",
+        "0",
+        check=False,
+    )
+    if put_master.returncode != 0:
+        raise RuntimeError(
+            "failed to set accessibility_enabled=0 for controlled rebind: "
+            + (put_master.stdout or "")
+        )
+    delete_services = shell(
+        "settings",
+        "--user",
+        SETTINGS_USER,
+        "delete",
+        "secure",
+        "enabled_accessibility_services",
+        check=False,
+    )
+    if delete_services.returncode != 0:
+        raise RuntimeError(
+            "failed to clear enabled_accessibility_services for controlled rebind: "
+            + (delete_services.stdout or "")
+        )
+    services_after = read_setting("enabled_accessibility_services")
+    master_after = read_setting("accessibility_enabled")
+    print(
+        f"Accessibility disabled readback reason={reason} "
+        f"services={services_after!r} master={master_after!r}",
+        flush=True,
+    )
+    if any(component_present(entry) for entry in parse_enabled_setting(services_after)):
+        raise RuntimeError("controlled rebind failed to remove Revolution from enabled services")
+    if master_after != "0":
+        raise RuntimeError(
+            "controlled rebind failed to read back accessibility_enabled=0: "
+            + master_after
+        )
+
+
 def set_service_enabled():
     grant_bind_accessibility_appop()
     write_secure_accessibility_state("initial")
@@ -251,6 +298,41 @@ def accessibility_manager_reports_exact_clean_binding(accessibility_dump, settin
     return True
 
 
+def accessibility_manager_reports_fully_unbound(accessibility_dump):
+    return (
+        not re.search(r"\bService\s*\[", bound_section(accessibility_dump))
+        and collection_section_is_empty(binding_section(accessibility_dump))
+        and collection_section_is_empty(crashed_section(accessibility_dump))
+        and not component_present(enabled_section(accessibility_dump))
+    )
+
+
+def wait_for_service_unbound(timeout_s=5.0):
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while time.monotonic() < deadline:
+        services = read_setting("enabled_accessibility_services")
+        master = read_setting("accessibility_enabled")
+        accessibility_dump = shell("dumpsys", "accessibility", check=False).stdout or ""
+        settings_disabled = (
+            master == "0"
+            and not any(component_present(entry) for entry in parse_enabled_setting(services))
+        )
+        manager_unbound = accessibility_manager_reports_fully_unbound(accessibility_dump)
+        print(
+            f"A11Y unbind probe={attempt} settingsDisabled={settings_disabled} "
+            f"managerUnbound={manager_unbound} services={services!r} master={master!r}",
+            flush=True,
+        )
+        if settings_disabled and manager_unbound:
+            return
+        time.sleep(0.25)
+        attempt += 1
+    raise RuntimeError(
+        "controlled API35 Accessibility rebind could not prove the old service fully unbound"
+    )
+
+
 def write_state_artifacts(attempt, settings_services, master, accessibility_dump):
     (ARTIFACT_DIR / "a11y-enabled-setting.txt").write_text(
         settings_services + "\n", encoding="utf-8"
@@ -266,6 +348,8 @@ def wait_for_bound_service(timeout_s=20.0):
     deadline = time.monotonic() + timeout_s
     attempt = 0
     last = ("", "", "")
+    binding_stalled_since = None
+    rebind_attempted = False
     while time.monotonic() < deadline:
         services = read_setting("enabled_accessibility_services")
         master = read_setting("accessibility_enabled")
@@ -292,7 +376,8 @@ def wait_for_bound_service(timeout_s=20.0):
         manager_exact_clean = accessibility_manager_reports_exact_clean_binding(
             accessibility_dump, services
         )
-        binding = re.sub(r"\s+", " ", binding_section(accessibility_dump)).strip()
+        binding_raw = binding_section(accessibility_dump)
+        binding = re.sub(r"\s+", " ", binding_raw).strip()
         crashed = re.sub(r"\s+", " ", crashed_section(accessibility_dump)).strip()
         has_motion_injector = "MotionEventInjector" in accessibility_dump
         print(
@@ -305,6 +390,33 @@ def wait_for_bound_service(timeout_s=20.0):
         )
         if setting_ok and manager_exact_clean:
             return True
+
+        binding_in_progress = not collection_section_is_empty(binding_raw)
+        if setting_ok and binding_in_progress:
+            if binding_stalled_since is None:
+                binding_stalled_since = time.monotonic()
+            elif (
+                not rebind_attempted
+                and time.monotonic() - binding_stalled_since >= 3.0
+            ):
+                # Known-good API35 settles this transition in about one second.
+                # If the framework remains in Binding for 3s, perform one real
+                # disable/unbind/enable cycle. The final gate is unchanged: this
+                # helper still refuses to pass until the service is Bound-only and
+                # MotionEventInjector is active.
+                rebind_attempted = True
+                print(
+                    "A11Y binding stalled for >=3s; performing one controlled rebind",
+                    flush=True,
+                )
+                write_secure_accessibility_disabled_state("stuck-binding-recovery")
+                wait_for_service_unbound()
+                write_secure_accessibility_state("stuck-binding-recovery")
+                binding_stalled_since = None
+                continue
+        else:
+            binding_stalled_since = None
+
         time.sleep(0.5)
         attempt += 1
 
