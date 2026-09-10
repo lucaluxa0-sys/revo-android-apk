@@ -1,0 +1,166 @@
+name: Probe Revolution Go module cache for source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-real-source-module-proxy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache module-proxy
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Extract embedded Go build information
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '===== go version -m ====='
+            go version -m .cache/RevolutionMacro.exe
+            echo
+            echo '===== go tool buildid ====='
+            go tool buildid .cache/RevolutionMacro.exe
+            echo
+            echo '===== strings build/vcs hints ====='
+            strings -a -n 7 .cache/RevolutionMacro.exe | grep -E '^(path|mod|dep|build)[[:space:]]|vcs\.|vcs\.revision|vcs\.time|vcs\.modified|github\.com/nosyliam/revolution([[:space:]]|$)' | head -n 1200
+          } > module-proxy/build-info.txt 2>&1
+          cat module-proxy/build-info.txt
+          exit 0
+
+      - name: Query public Go proxy for real Revolution module
+        shell: bash
+        env:
+          GOPROXY: https://proxy.golang.org
+          GONOSUMDB: ''
+          GOPRIVATE: ''
+        run: |
+          set +e
+          MODULE='github.com/nosyliam/revolution'
+          ESC='github.com/nosyliam/revolution'
+          {
+            echo '===== go list versions ====='
+            go list -m -versions "$MODULE"
+            echo "exit=$?"
+            echo
+            echo '===== go list latest json ====='
+            go list -m -json "$MODULE@latest"
+            echo "exit=$?"
+            echo
+            echo '===== proxy @v/list ====='
+            curl -sS -D - "https://proxy.golang.org/$ESC/@v/list"
+            echo
+            echo '===== proxy @latest ====='
+            curl -sS -D - "https://proxy.golang.org/$ESC/@latest"
+            echo
+          } > module-proxy/proxy-query.txt 2>&1
+          cat module-proxy/proxy-query.txt
+          exit 0
+
+      - name: Download any cached module versions and inspect source paths
+        shell: python
+        run: |
+          import json, os, re, subprocess, urllib.request, urllib.error, zipfile
+          from pathlib import Path
+
+          out=Path('module-proxy')
+          q=(out/'proxy-query.txt').read_text(errors='replace')
+          versions=[]
+          for line in q.splitlines():
+              line=line.strip()
+              if re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?', line): versions.append(line)
+              if re.fullmatch(r'v\d+\.\d+\.\d+-\d{14}-[0-9a-f]{12}', line): versions.append(line)
+          # go list -m -versions prints module followed by versions on one line.
+          for line in q.splitlines():
+              if line.startswith('github.com/nosyliam/revolution '):
+                  versions += [x for x in line.split()[1:] if x.startswith('v')]
+          # Pull Version from @latest JSON if present.
+          m=re.search(r'"Version"\s*:\s*"([^"]+)"', q)
+          if m: versions.append(m.group(1))
+          versions=list(dict.fromkeys(versions))
+          (out/'discovered-versions.txt').write_text('\n'.join(versions))
+          print('discovered_versions=',versions)
+
+          base='https://proxy.golang.org/github.com/nosyliam/revolution/@v/'
+          report=[]
+          for ver in versions[:20]:
+              safe=ver.replace('/','_')
+              for ext in ('info','mod','zip'):
+                  url=base+ver+'.'+ext
+                  dst=out/f'{safe}.{ext}'
+                  try:
+                      with urllib.request.urlopen(url,timeout=30) as r:
+                          dst.write_bytes(r.read())
+                      report.append(f'OK {url} -> {dst.name} {dst.stat().st_size} bytes')
+                  except Exception as e:
+                      report.append(f'FAIL {url}: {type(e).__name__}: {e}')
+              z=out/f'{safe}.zip'
+              if z.exists() and z.stat().st_size:
+                  try:
+                      with zipfile.ZipFile(z) as zz:
+                          names=zz.namelist()
+                          hits=[n for n in names if re.search(r'(lua/ast/codec|routing|route|hive|walk|navigation|pattern|cannon|spawn|gather)',n,re.I)]
+                          (out/f'{safe}-interesting-paths.txt').write_text('\n'.join(hits))
+                          report.append(f'{ver}: zip_files={len(names)} interesting={len(hits)}')
+                          # Extract only high-value source files, bounded to 300 files / 5 MiB each.
+                          dest=out/f'{safe}-source'
+                          count=0
+                          for n in hits:
+                              if count>=300: break
+                              info=zz.getinfo(n)
+                              if info.is_dir() or info.file_size>5_000_000: continue
+                              if not re.search(r'\.(go|lua|json|yaml|yml|txt|md)$',n,re.I): continue
+                              data=zz.read(n)
+                              rel='/'.join(n.split('/')[1:]) if '/' in n else n
+                              p=dest/rel
+                              p.parent.mkdir(parents=True,exist_ok=True)
+                              p.write_bytes(data)
+                              count+=1
+                          report.append(f'{ver}: extracted_interesting_source={count}')
+                  except Exception as e:
+                      report.append(f'{ver}: ZIP ERROR {type(e).__name__}: {e}')
+          (out/'download-report.txt').write_text('\n'.join(report))
+          print('\n'.join(report))
+
+      - name: Search recovered source for routing and patterns.bin implementation
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '===== RECOVERED SOURCE FILES ====='
+            find module-proxy -type f \( -name '*.go' -o -name '*.lua' \) -print | sort
+            echo
+            echo '===== PATTERN CONTAINER / CODEC ====='
+            grep -RniE --include='*.go' --include='*.lua' 'patterns\.bin|decompress patterns|Pattern Version|bson|UnmarshalWithRegistry|walkStrings|restoreStrings|LoadStringToPattern|compilePattern|parsePattern' module-proxy/*-source 2>/dev/null | head -n 3000
+            echo
+            echo '===== HIVE / ROUTING / WALK ====='
+            grep -RniE --include='*.go' --include='*.lua' 'claim.*hive|ClaimedHive|HiveClaimMethod|PreferredHiveSlot|CurrentGatherField|WalkAsync|WalkAlign|Travelling To|Navigating to|red.?cannon|SpawnedOnHivePad|CheckForClaimedHive|PathingFailure|gather\.nextField|useDipper' module-proxy/*-source 2>/dev/null | head -n 5000
+          } > module-proxy/source-search.txt 2>&1
+          cat module-proxy/source-search.txt
+          exit 0
+
+      - name: Upload module-cache evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-real-source-module-proxy
+          path: module-proxy/
+          if-no-files-found: error
