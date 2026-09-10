@@ -1,0 +1,89 @@
+name: Probe historical hive-claim Revolution binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-historical-hiveclaim-binary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Download historical updater that shipped hive-claim fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache historical-hiveclaim
+          curl -fL --retry 4 --retry-delay 2 \
+            -o .cache/RevolutionUpdater-0.5a-hotfix4.exe \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro-updates/main/0.5a-hotfix4/RevolutionUpdater-0.5a-hotfix4.exe
+          sha256sum .cache/RevolutionUpdater-0.5a-hotfix4.exe | tee historical-hiveclaim/sha256.txt
+          file .cache/RevolutionUpdater-0.5a-hotfix4.exe | tee historical-hiveclaim/file.txt
+          stat -c '%s bytes' .cache/RevolutionUpdater-0.5a-hotfix4.exe | tee -a historical-hiveclaim/file.txt
+
+      - name: Inspect archive/resources and routing strings
+        shell: bash
+        run: |
+          set +e
+          7z l .cache/RevolutionUpdater-0.5a-hotfix4.exe > historical-hiveclaim/7z-list.txt 2>&1
+          strings -a -n 5 .cache/RevolutionUpdater-0.5a-hotfix4.exe > historical-hiveclaim/strings.txt
+          grep -niE 'Claimed Hive|Travelling To|claimhive|hive claim|preferredhive|hiveclaim|walkasync|walkalign|red-cannon|cannondiscovery|spawnedonhive|currentgatherfield|pathingfailure|gather.nextfield|gather.usedipper' historical-hiveclaim/strings.txt \
+            > historical-hiveclaim/routing-strings.txt || true
+          echo '===== ROUTING STRINGS ====='
+          head -n 1000 historical-hiveclaim/routing-strings.txt
+          echo '===== 7Z LIST HEAD ====='
+          head -n 160 historical-hiveclaim/7z-list.txt
+
+      - name: Build GoReSym and probe metadata
+        shell: bash
+        run: |
+          set +e
+          git clone --depth 1 https://github.com/mandiant/GoReSym.git /tmp/GoReSym
+          (cd /tmp/GoReSym && go build -o /tmp/goresym .)
+          /tmp/goresym .cache/RevolutionUpdater-0.5a-hotfix4.exe > historical-hiveclaim/goresym.json 2> historical-hiveclaim/goresym.err
+          rc=$?
+          echo "goresym_exit=$rc" | tee historical-hiveclaim/goresym-status.txt
+          head -n 80 historical-hiveclaim/goresym.err || true
+          head -c 2000 historical-hiveclaim/goresym.json || true
+          echo
+
+      - name: Extract routing functions if GoReSym succeeded
+        shell: python
+        run: |
+          import json,re
+          from pathlib import Path
+          p=Path('historical-hiveclaim/goresym.json')
+          out=[]
+          try:
+              d=json.loads(p.read_text(errors='replace'))
+          except Exception as e:
+              Path('historical-hiveclaim/routing-functions.txt').write_text('NO_VALID_JSON: '+repr(e))
+              raise SystemExit(0)
+          terms=re.compile(r'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|dipper',re.I)
+          for key in ('UserFunctions','StdFunctions'):
+              fs=d.get(key) or []
+              out.append(f'{key}={len(fs)}')
+              for f in fs:
+                  blob=' '.join(str(v) for v in f.values()) if isinstance(f,dict) else str(f)
+                  if terms.search(blob): out.append(json.dumps(f,sort_keys=True))
+          Path('historical-hiveclaim/routing-functions.txt').write_text('\n'.join(out))
+          print('\n'.join(out[:1000]))
+
+      - name: Upload historical hive-claim evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-historical-hiveclaim-binary
+          path: historical-hiveclaim/
+          if-no-files-found: error
