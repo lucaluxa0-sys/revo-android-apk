@@ -34,7 +34,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import bisect, json, re, struct
+          import bisect, json, struct
           import pefile
           from capstone import Cs, CS_ARCH_X86, CS_MODE_64
           from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
@@ -59,20 +59,14 @@ jobs:
               rva=va-base
               if rva < pe.OPTIONAL_HEADER.SizeOfHeaders:return rva
               for s in sections:
-                  if s['rva']<=rva<s['rva']+s['size']:
-                      return s['raw']+rva-s['rva']
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
               return None
-          def preview_va(va,n=180):
+          def preview_va(va,n=220):
               off=va2off(va)
               if off is None:return ''
               b=raw[off:min(len(raw),off+n)]
-              out=[]
-              for x in b:
-                  if 32<=x<127:out.append(chr(x))
-                  else:out.append('.')
-              return ''.join(out)
+              return ''.join(chr(x) if 32<=x<127 else '.' for x in b)
 
-          # .pdata gives authoritative x64 function extents even when Go symbol metadata is obfuscated.
           funcs=[]
           try:
               for e in pe.DIRECTORY_ENTRY_EXCEPTION:
@@ -102,6 +96,8 @@ jobs:
                   rva=off2rva(off)
                   if rva is not None:occ.append(dict(text=n.decode(),off=off,va=base+rva,length=len(n)))
                   pos=off+1
+          occ.sort(key=lambda x:x['va'])
+          occ_vas=[o['va'] for o in occ]
 
           md=Cs(CS_ARCH_X86,CS_MODE_64);md.detail=True
           code=[]
@@ -121,21 +117,19 @@ jobs:
           report.append(f'LITERAL_OCCURRENCES={len(occ)}')
           for o in occ:report.append('LITERAL '+json.dumps(o,sort_keys=True))
 
-          # Garble removes/changes ordinary pclntab metadata, but route literals remain packed in Go's
-          # read-only string slab. Trace both direct references and references to global string descriptors.
           direct=[]
-          for o in occ:
-              lo=o['va']-192; hi=o['va']+o['length']
-              for ci in code:
-                  for t in ci['targets']:
-                      if lo<=t<=hi:
-                          pv=preview_va(t,260)
-                          if o['text'] not in pv:continue
-                          f=containing(ci['address'])
-                          direct.append(dict(literal=o['text'],literal_va=o['va'],target_va=t,
-                              target_delta=t-o['va'],preview=pv[:260],insn_va=ci['address'],
-                              mnemonic=ci['mnemonic'],op_str=ci['op_str'],function=f))
-          # De-duplicate repeated matches from overlapping literal occurrences.
+          for ci in code:
+              for t in ci['targets']:
+                  i=bisect.bisect_left(occ_vas,t-32)
+                  j=bisect.bisect_right(occ_vas,t+192)
+                  for o in occ[i:j]:
+                      if not (o['va']-192<=t<=o['va']+o['length']):continue
+                      pv=preview_va(t,260)
+                      if o['text'] not in pv:continue
+                      f=containing(ci['address'])
+                      direct.append(dict(literal=o['text'],literal_va=o['va'],target_va=t,
+                          target_delta=t-o['va'],preview=pv[:260],insn_va=ci['address'],
+                          mnemonic=ci['mnemonic'],op_str=ci['op_str'],function=f))
           seen=set(); direct2=[]
           for x in direct:
               k=(x['literal'],x['target_va'],x['insn_va'])
@@ -144,67 +138,66 @@ jobs:
           report.append(f'PACKED_DIRECT_XREFS={len(direct)}')
           for x in direct:report.append('DIRECT '+json.dumps(x,sort_keys=True))
 
+          # Linear scan for ordinary Go string descriptors {data pointer, length}. This avoids a
+          # combinatorial raw.find loop and catches globals/tables whose string starts before a target
+          # sub-literal in Go's packed string slab.
           descriptors=[]
-          for o in occ:
-              # The descriptor may start at the literal itself, or at an earlier address in the same packed
-              # string slab when the literal is a suffix/sub-string. Check starts up to 192 bytes earlier and
-              # all sane Go string lengths that still cover the target literal.
-              for delta in range(-192,1):
-                  sva=o['va']+delta
-                  soff=va2off(sva)
-                  if soff is None:continue
-                  rel=o['va']-sva
-                  for length in range(max(1,rel+o['length']),min(320,rel+o['length']+160)+1):
-                      end=soff+length
-                      if end>len(raw):break
-                      b=raw[soff:end]
-                      if o['text'].encode() not in b:continue
-                      # Avoid nonsensical spans; Go literals are printable UTF-8/ASCII in this route table.
-                      if sum(32<=z<127 for z in b) < max(1,int(len(b)*0.92)):continue
-                      pat=struct.pack('<QQ',sva,length)
-                      p=0
-                      while True:
-                          hit=raw.find(pat,p)
-                          if hit<0:break
-                          rva=off2rva(hit)
-                          if rva is not None:
-                              dva=base+rva
-                              descriptors.append(dict(literal=o['text'],literal_va=o['va'],string_va=sva,
-                                  string_len=length,string_text=b.decode('ascii','replace'),descriptor_off=hit,
-                                  descriptor_va=dva))
-                          p=hit+1
-          uniq=[];seen=set()
+          for s in sections:
+              begin=s['raw']; end=min(len(raw),s['raw']+s['size'])
+              # PE sections and Go globals are 8-byte aligned; align relative to file offset.
+              p=(begin+7)&~7
+              while p+16<=end:
+                  sva,length=struct.unpack_from('<QQ',raw,p)
+                  if base<=sva<base+image_size and 1<=length<=320:
+                      soff=va2off(sva)
+                      if soff is not None and soff+length<=len(raw):
+                          left=bisect.bisect_left(occ_vas,sva)
+                          right=bisect.bisect_right(occ_vas,sva+length)
+                          if left<right:
+                              b=raw[soff:soff+length]
+                              if sum(32<=z<127 for z in b)>=max(1,int(len(b)*0.92)):
+                                  txt=b.decode('ascii','replace')
+                                  for o in occ[left:right]:
+                                      if o['va']+o['length']<=sva+length and o['text'] in txt:
+                                          rva=off2rva(p)
+                                          if rva is not None:
+                                              descriptors.append(dict(literal=o['text'],literal_va=o['va'],
+                                                  string_va=sva,string_len=length,string_text=txt,
+                                                  descriptor_off=p,descriptor_va=base+rva))
+                  p+=8
+          seen=set(); desc2=[]
           for d in descriptors:
               k=(d['literal'],d['string_va'],d['string_len'],d['descriptor_va'])
-              if k not in seen:seen.add(k);uniq.append(d)
-          descriptors=uniq
+              if k not in seen:seen.add(k);desc2.append(d)
+          descriptors=desc2
           report.append(f'STRING_DESCRIPTORS={len(descriptors)}')
           for d in descriptors:report.append('DESC '+json.dumps(d,sort_keys=True))
 
           desc_xrefs=[]
-          by_dva={d['descriptor_va']:d for d in descriptors}
+          descriptor_vas=sorted(set(d['descriptor_va'] for d in descriptors))
+          desc_by_va={}
+          for d in descriptors:desc_by_va.setdefault(d['descriptor_va'],[]).append(d)
           for ci in code:
               for t in ci['targets']:
-                  # Include references to fields within a descriptor/table neighborhood.
-                  for dva,d in by_dva.items():
-                      if dva-64<=t<=dva+64:
+                  k=bisect.bisect_left(descriptor_vas,t-64)
+                  m=bisect.bisect_right(descriptor_vas,t+64)
+                  for dva in descriptor_vas[k:m]:
+                      for d in desc_by_va[dva]:
                           f=containing(ci['address'])
                           desc_xrefs.append(dict(literal=d['literal'],descriptor_va=dva,target_va=t,
                               target_delta=t-dva,string_text=d['string_text'],insn_va=ci['address'],
                               mnemonic=ci['mnemonic'],op_str=ci['op_str'],function=f))
-          uniq=[];seen=set()
+          seen=set(); dx2=[]
           for x in desc_xrefs:
               k=(x['literal'],x['descriptor_va'],x['insn_va'],x['target_va'])
-              if k not in seen:seen.add(k);uniq.append(x)
-          desc_xrefs=uniq
+              if k not in seen:seen.add(k);dx2.append(x)
+          desc_xrefs=dx2
           report.append(f'DESCRIPTOR_XREFS={len(desc_xrefs)}')
           for x in desc_xrefs:report.append('DESC_XREF '+json.dumps(x,sort_keys=True))
 
           targets=set()
           for x in direct+desc_xrefs:
               if x['function']:targets.add(tuple(x['function']))
-          # Also keep exact .pdata functions nearest the route slab references, for callers that build
-          # descriptors with MOV/LEA sequences not represented as a static 16-byte descriptor.
           Path('route-map/evidence.json').write_text(json.dumps(dict(occurrences=occ,direct=direct,
               descriptors=descriptors,descriptor_xrefs=desc_xrefs,functions=sorted(targets)),indent=2),encoding='utf-8')
 
