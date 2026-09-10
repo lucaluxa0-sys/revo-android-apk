@@ -1,0 +1,126 @@
+name: Trace exact v0.9c Walk runtime semantics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-walk-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache walk-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+      - name: Install parsers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+      - name: Annotate current Walk runtime and callers
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_GRP_CALL
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes(); pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase); image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[dict(raw=int(s.PointerToRawData),size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),data=s.get_data()) for s in pe.sections]
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
+              return None
+          def q(o):return struct.unpack_from('<Q',raw,o)[0]
+          def u32(o):return struct.unpack_from('<I',raw,o)[0]
+          def i32(o):return struct.unpack_from('<i',raw,o)[0]
+          def cstr(va,limit=800):
+              o=va2off(va)
+              if o is None:return None
+              z=raw.find(b'\0',o,min(len(raw),o+limit));z=min(len(raw),o+limit) if z<0 else z
+              try:return raw[o:z].decode('utf-8')
+              except:return None
+          minpc=0x1400014a0;best=None;p=0
+          while True:
+              h=raw.find(struct.pack('<Q',minpc),p)
+              if h<0:break
+              md=h-160
+              if md>=0:
+                  ft=q(md+128);n=q(md+136);cap=q(md+144);text=q(md+176);fn=q(md+8);pcln=q(md+104)
+                  score=sum([text==minpc,1000<n<500000,cap>=n,va2off(ft)is not None,va2off(fn)is not None,va2off(pcln)is not None])
+                  if best is None or score>best[0]:best=(score,(ft,n,text,fn,pcln))
+              p=h+1
+          if not best or best[0]<5:raise SystemExit('moduledata recovery failed')
+          ft,n,text,fn,pcln=best[1];fo=va2off(ft);po=va2off(pcln);funcs=[]
+          for i in range(int(n)-1):
+              ent=u32(fo+i*8);funcoff=u32(fo+i*8+4);fm=po+funcoff
+              if not(0<=fm+8<len(raw)):continue
+              name=cstr(fn+i32(fm+4));addr=text+ent
+              if name and base<=addr<base+image_size:funcs.append((addr,name))
+          funcs.sort();addrs=[a for a,_ in funcs];names=dict(funcs)
+          def fend(a):
+              i=bisect.bisect_left(addrs,a);return addrs[i+1] if i+1<len(addrs) else a+0x10000
+          def code(a):
+              e=fend(a)
+              for s in sections:
+                  sv=base+s['rva'];ev=sv+len(s['data'])
+                  if sv<=a<ev:return s['data'][a-sv:min(len(s['data']),e-sv)]
+              return b''
+          mdx=Cs(CS_ARCH_X86,CS_MODE_64);mdx.detail=True
+          targets=[]
+          for a,nm in funcs:
+              if a==0x140c61480 or (nm.startswith('revo_') and any(k in nm for k in ['.Walk','.Sleep','WalkDetector','WalkAlign','WalkAsync'])):
+                  targets.append(a)
+          # include direct callers/callees of the exact current Walk wrapper
+          edges=[]
+          for a,nm in funcs:
+              data=code(a)
+              if not data:continue
+              for ins in mdx.disasm(data,a):
+                  if ins.group(CS_GRP_CALL):
+                      for op in ins.operands:
+                          if op.type==X86_OP_IMM:
+                              t=int(op.imm)&((1<<64)-1)
+                              if t in names:edges.append((a,t,ins.address))
+          walk=0x140c61480
+          for a,t,i in edges:
+              if t==walk or a==walk:
+                  targets.extend([a,t])
+          targets=sorted(set(targets))
+          out=[]
+          for a in targets:
+              out.append(f'===== {a:#x} {names.get(a)} end={fend(a):#x} =====')
+              for ins in mdx.disasm(code(a),a):
+                  ann=[]
+                  if ins.group(CS_GRP_CALL):
+                      for op in ins.operands:
+                          if op.type==X86_OP_IMM:
+                              t=int(op.imm)&((1<<64)-1)
+                              if t in names:ann.append('CALL='+names[t])
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          t=ins.address+ins.size+op.mem.disp
+                          if base<=t<base+image_size:
+                              s=cstr(t,240)
+                              if s and any(ch.isprintable() for ch in s[:20]):ann.append('RIPSTR='+repr(s[:240]))
+                  out.append(f'{ins.address:#x}: {ins.mnemonic:8s} {ins.op_str}'+((' ; '+' | '.join(ann)) if ann else ''))
+          Path('walk-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out))
+      - name: Upload walk evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-walk-runtime
+          path: walk-evidence/
+          if-no-files-found: error
