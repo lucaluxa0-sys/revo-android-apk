@@ -1,0 +1,197 @@
+name: Recover patterns.bin loader and decoder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-patterns-bin-decoder.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution desktop binary and dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache pattern-decoder
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          curl -fL --retry 4 --retry-delay 2 -o .cache/patterns.bin \
+            https://raw.githubusercontent.com/nosyliam/revolution-macro/v0.9c-hotfix3/datasets/v8/patterns.bin
+          sha256sum .cache/RevolutionMacro.exe .cache/patterns.bin | tee pattern-decoder/sha256.txt
+          stat -c '%n %s bytes' .cache/RevolutionMacro.exe .cache/patterns.bin | tee pattern-decoder/sizes.txt
+
+      - name: Install PE/disassembly helpers
+        shell: bash
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Inventory loader, codec and crypto evidence
+        shell: python
+        run: |
+          from pathlib import Path
+          import re, math, collections
+
+          exe = Path('.cache/RevolutionMacro.exe').read_bytes()
+          pb = Path('.cache/patterns.bin').read_bytes()
+          terms = [
+            'patterns.bin','datasets/','datasets\\','Unable to load patterns','error loading patterns',
+            'Error loading patterns','LoadPattern','load patterns','pattern loader','patterns path',
+            'NewCipher','NewGCM','cipher.NewGCM','crypto/aes','crypto/cipher','chacha20poly1305',
+            'x/crypto','zstd','klauspost','flate','compress/gzip','gzip.NewReader','zlib',
+            'snappy','lz4','Decode','Decrypt','Unmarshal','json.Unmarshal','gob.NewDecoder',
+            'msgpack','protobuf','base64','hex.Decode','sha256','blake','scrypt','argon2',
+            'ReadFile','os.ReadFile','io.ReadAll','OpenFile','embed.FS','fs.ReadFile'
+          ]
+          strings=[]
+          for m in re.finditer(rb'[\x20-\x7e]{4,}', exe):
+              try: s=m.group().decode('ascii')
+              except: continue
+              strings.append((m.start(),s))
+          out=[]
+          for term in terms:
+              hits=[(off,s) for off,s in strings if term.lower() in s.lower()]
+              out.append(f'===== TERM {term} count={len(hits)} =====')
+              for off,s in hits[:80]:
+                  out.append(f'0x{off:x}: {s[:500]}')
+          # Show the local ASCII slab around every patterns.bin occurrence.
+          for i,(off,s) in enumerate([(o,s) for o,s in strings if 'patterns.bin' in s.lower()]):
+              a=max(0,off-2048); b=min(len(exe),off+len(s)+2048)
+              chunk=exe[a:b]
+              printable=''.join(chr(x) if 32<=x<127 else '.' for x in chunk)
+              out.append(f'===== PATTERNS.BIN ASCII WINDOW {i} file=0x{off:x} =====')
+              out.append(printable)
+          counts=collections.Counter(pb)
+          ent=-sum((n/len(pb))*math.log2(n/len(pb)) for n in counts.values())
+          out.append(f'patterns_bin_entropy={ent:.8f}')
+          out.append('patterns_bin_head='+pb[:96].hex())
+          Path('pattern-decoder/string-evidence.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out[:1200]))
+
+      - name: Recover exact and nearby code references
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, json, re
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics),data=s.get_data()))
+          def off2rva(off):
+              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:return off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']:return s['rva']+off-s['raw']
+              return None
+          funcs=[]
+          try:
+              for e in pe.DIRECTORY_ENTRY_EXCEPTION:
+                  b=int(e.struct.BeginAddress); en=int(e.struct.EndAddress)
+                  if b<en: funcs.append((b,en))
+          except:pass
+          funcs=sorted(set(funcs)); starts=[b for b,_ in funcs]
+          def containing(rva):
+              i=bisect.bisect_right(starts,rva)-1
+              if i>=0 and funcs[i][0]<=rva<funcs[i][1]:return funcs[i]
+              return None
+
+          # More specific anchors than the old generic probe.
+          needles=[b'patterns.bin',b'Unable to load patterns',b'error loading patterns',b'Error loading patterns',
+                   b'LoadPattern',b'crypto/aes',b'crypto/cipher',b'NewCipher',b'NewGCM',b'Decrypt',
+                   b'gzip.NewReader',b'compress/gzip',b'zstd',b'json.Unmarshal',b'gob.NewDecoder',b'os.ReadFile']
+          anchors=[]
+          for n in needles:
+              p=0
+              while True:
+                  off=raw.find(n,p)
+                  if off<0:break
+                  rva=off2rva(off)
+                  if rva is not None:anchors.append(dict(text=n.decode('ascii','replace'),off=off,rva=rva,va=base+rva,length=len(n)))
+                  p=off+1
+
+          md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
+          code=[]
+          for s in sections:
+              if not (s['chars']&0x20000000):continue
+              for ins in md.disasm(s['data'],base+s['rva']):
+                  ts=[]
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          ts.append(('rip',ins.address+ins.size+op.mem.disp))
+                      elif op.type==X86_OP_IMM:
+                          v=int(op.imm)&((1<<64)-1)
+                          if base<=v<base+int(pe.OPTIONAL_HEADER.SizeOfImage):ts.append(('imm',v))
+                  if ts:code.append(dict(rva=ins.address-base,va=ins.address,mn=ins.mnemonic,op=ins.op_str,targets=ts))
+
+          exact=[]; nearby=[]
+          for a in anchors:
+              for ci in code:
+                  for mode,t in ci['targets']:
+                      d=t-a['va']
+                      if 0<=d<a['length']:
+                          exact.append(dict(anchor=a['text'],anchor_rva=a['rva'],distance=d,mode=mode,
+                              insn_rva=ci['rva'],mn=ci['mn'],op=ci['op'],function=containing(ci['rva'])))
+                      # Tight +/-4 KiB only; used to identify shared rodata slabs, not as semantic proof.
+                      if abs(d)<=4096:
+                          nearby.append(dict(anchor=a['text'],anchor_rva=a['rva'],distance=d,target_rva=t-base,mode=mode,
+                              insn_rva=ci['rva'],mn=ci['mn'],op=ci['op'],function=containing(ci['rva'])))
+          nearby.sort(key=lambda x:(x['anchor_rva'],abs(x['distance']),x['insn_rva']))
+
+          # Candidate functions must be supported by at least two distinct high-signal anchors nearby.
+          support={}
+          for h in nearby:
+              if not h['function']:continue
+              f=tuple(h['function']); support.setdefault(f,set()).add(h['anchor'])
+          candidates={f:sorted(v) for f,v in support.items() if len(v)>=2}
+
+          def func_data(b,en):
+              for s in sections:
+                  if (s['chars']&0x20000000) and s['rva']<=b<s['rva']+len(s['data']):
+                      x=b-s['rva']; y=min(len(s['data']),en-s['rva'])
+                      return s['name'],s['data'][x:y],base+b
+              return '<none>',b'',base+b
+
+          lines=[f'image_base=0x{base:x}',f'anchors={len(anchors)}',f'exact_xrefs={len(exact)}',f'nearby_refs={len(nearby)}']
+          for a in anchors:lines.append(f"ANCHOR {a['text']!r} file=0x{a['off']:x} rva=0x{a['rva']:x}")
+          lines.append('===== EXACT XREFS =====')
+          for x in exact:
+              lines.append(json.dumps(x,sort_keys=True))
+          lines.append('===== MULTI-ANCHOR CANDIDATE FUNCTIONS =====')
+          for f,names in sorted(candidates.items()):lines.append(f'FUNC 0x{f[0]:x}-0x{f[1]:x} anchors={names}')
+          lines.append('===== TOP NEARBY REFS PER ANCHOR =====')
+          for a in anchors:
+              hs=[h for h in nearby if h['anchor_rva']==a['rva']][:30]
+              lines.append(f"-- {a['text']!r}@0x{a['rva']:x} --")
+              for h in hs:lines.append(json.dumps(h,sort_keys=True))
+
+          for (b,en),names in sorted(candidates.items()):
+              sec,data,va=func_data(b,en)
+              lines += ['',f'===== CANDIDATE 0x{b:x}-0x{en:x} size={en-b} section={sec} anchors={names} =====']
+              for i,ins in enumerate(md.disasm(data,va)):
+                  if i>=2500: lines.append('... truncated ...');break
+                  lines.append(f"0x{ins.address-base:08x}: {ins.mnemonic:8s} {ins.op_str}")
+
+          Path('pattern-decoder/xrefs.txt').write_text('\n'.join(lines),encoding='utf-8')
+          Path('pattern-decoder/xrefs.json').write_text(json.dumps(dict(anchors=anchors,exact=exact,nearby=nearby,candidates={f'{k[0]:x}-{k[1]:x}':v for k,v in candidates.items()}),indent=2),encoding='utf-8')
+          print('\n'.join(lines[:1800]))
+
+      - name: Upload focused decoder evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-patterns-bin-decoder-evidence
+          path: pattern-decoder/
+          if-no-files-found: error
