@@ -1,0 +1,112 @@
+name: Recover desktop runtime routing files
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-runtime-routing-files.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Launch exact pinned Revolution and wait for extracted runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'revo-routing-runtime'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $exe = Join-Path $work 'RevolutionMacro.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe' -OutFile $exe
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb') { throw "SHA mismatch: $sha" }
+          $p = Start-Process -FilePath $exe -WorkingDirectory $work -PassThru
+          Write-Host "Started PID=$($p.Id)"
+          $patterns = Join-Path $work 'patterns\patterns.bin'
+          $settings = Join-Path $work 'settings\settings.yaml'
+          $ready = $false
+          for ($i=0; $i -lt 50; $i++) {
+            Start-Sleep -Seconds 2
+            try { $p.Refresh() } catch {}
+            if ($p.HasExited) { throw "Revolution exited early code=$($p.ExitCode)" }
+            $pb = if (Test-Path $patterns) { (Get-Item $patterns).Length } else { 0 }
+            $sb = if (Test-Path $settings) { (Get-Item $settings).Length } else { 0 }
+            Write-Host "probe=$($i+1) patterns=$pb settings=$sb"
+            if ($pb -gt 100000 -and $sb -gt 10000) { $ready=$true; break }
+          }
+          if (-not $ready) { throw 'runtime extraction did not initialize' }
+          Start-Sleep -Seconds 3
+
+      - name: Inventory and capture routing-relevant runtime data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'revo-routing-runtime'
+          $out = Join-Path $env:RUNNER_TEMP 'revo-routing-runtime-evidence'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $all = Get-ChildItem -LiteralPath $work -Recurse -Force -File | Where-Object { $_.Name -ne 'RevolutionMacro.exe' }
+          $rows = foreach ($f in $all) {
+            [pscustomobject]@{ RelativePath=$f.FullName.Substring($work.Length+1); Bytes=$f.Length }
+          }
+          $rows | Sort-Object RelativePath | Format-Table -AutoSize | Out-String -Width 4096 | Set-Content (Join-Path $out 'file-list.txt') -Encoding UTF8
+
+          foreach ($dir in @('settings','patterns')) {
+            $src=Join-Path $work $dir
+            if (Test-Path $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $out $dir) -Recurse -Force }
+          }
+
+          $needle = 'ClaimedHive|CurrentGatherField|PreferredHiveSlot|HiveClaimMethod|RoutingSettings|CheckForClaimedHive|SpawnedOnHivePad|PathingFailure|CannonDiscovery|CenterFieldInFrontOfCharacter|GatherFields|claimhive|WalkAlign|WalkAsync|useDipper|red-cannon|Travelling To|nextField|cannon|hive|field'
+          $textFiles = $all | Where-Object { $_.Extension -in @('.lua','.yaml','.yml','.json','.txt','.log','.toml','.ini','.cfg') }
+          $matches = New-Object System.Collections.Generic.List[string]
+          foreach ($f in $textFiles) {
+            try {
+              $content = Get-Content -LiteralPath $f.FullName -Raw -ErrorAction Stop
+              if ($content -match $needle) {
+                $rel=$f.FullName.Substring($work.Length+1)
+                $matches.Add("===== $rel =====")
+                $lines=$content -split "`r?`n"
+                for ($i=0; $i -lt $lines.Count; $i++) {
+                  if ($lines[$i] -match $needle) {
+                    $a=[Math]::Max(0,$i-3); $b=[Math]::Min($lines.Count-1,$i+3)
+                    for ($j=$a; $j -le $b; $j++) { $matches.Add(('{0:D4}: {1}' -f ($j+1),$lines[$j])) }
+                    $matches.Add('---')
+                  }
+                }
+              }
+            } catch {}
+          }
+          $matches | Set-Content (Join-Path $out 'routing-text-matches.txt') -Encoding UTF8
+
+          Get-ChildItem -LiteralPath (Join-Path $work 'patterns') -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -eq '.lua' } |
+            ForEach-Object { $_.FullName.Substring($work.Length+1) } |
+            Sort-Object | Set-Content (Join-Path $out 'lua-file-list.txt') -Encoding UTF8
+
+          Write-Host '===== RUNTIME FILE LIST ====='
+          Get-Content (Join-Path $out 'file-list.txt') | Write-Host
+          Write-Host '===== ROUTING TEXT MATCHES ====='
+          Get-Content (Join-Path $out 'routing-text-matches.txt') | Write-Host
+          Write-Host '===== LUA FILE LIST ====='
+          Get-Content (Join-Path $out 'lua-file-list.txt') | Write-Host
+
+      - name: Stop Revolution
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process RevolutionMacro -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+      - name: Upload routing runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-desktop-runtime-routing-files
+          path: ${{ runner.temp }}/revo-routing-runtime-evidence/
+          if-no-files-found: error
