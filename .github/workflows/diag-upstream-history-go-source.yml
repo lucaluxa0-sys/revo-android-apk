@@ -1,0 +1,85 @@
+name: Search upstream history for Revolution Go source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-upstream-history-go-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone full upstream history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-single-branch https://github.com/nosyliam/revolution-macro.git /tmp/upstream
+          cd /tmp/upstream
+          git fetch --tags --force
+          echo "commits=$(git rev-list --all --count)"
+          echo "refs=$(git show-ref | wc -l)"
+
+      - name: Inventory historical Go source paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p history-evidence/history-source
+          cd /tmp/upstream
+          git log --all --full-history --name-only --format= -- '*.go' | sed '/^$/d' | sort -u > "$GITHUB_WORKSPACE/history-evidence/all-go-paths.txt"
+          echo "historical_go_paths=$(wc -l < "$GITHUB_WORKSPACE/history-evidence/all-go-paths.txt")"
+          grep -Ei 'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|macro|player' "$GITHUB_WORKSPACE/history-evidence/all-go-paths.txt" > "$GITHUB_WORKSPACE/history-evidence/routing-go-paths.txt" || true
+          cat "$GITHUB_WORKSPACE/history-evidence/routing-go-paths.txt"
+
+      - name: Recover latest historical contents of routing-related Go files
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess, re, json
+          repo=Path('/tmp/upstream')
+          out=Path.cwd()/'history-evidence'
+          paths=(out/'routing-go-paths.txt').read_text(errors='replace').splitlines()
+          manifest=[]
+          for path in paths[:500]:
+              path=path.strip()
+              if not path: continue
+              q=subprocess.run(['git','-C',str(repo),'log','--all','--full-history','--format=%H','--',path],capture_output=True,text=True,check=True).stdout.splitlines()
+              recovered=False
+              for sha in q:
+                  r=subprocess.run(['git','-C',str(repo),'show',f'{sha}:{path}'],capture_output=True)
+                  if r.returncode==0 and r.stdout:
+                      safe=re.sub(r'[^A-Za-z0-9._-]+','__',path)
+                      dest=out/'history-source'/f'{safe}__{sha[:12]}.go'
+                      dest.write_bytes(r.stdout)
+                      txt=r.stdout.decode('utf-8','replace')
+                      manifest.append({'path':path,'commit':sha,'bytes':len(r.stdout),'dest':dest.name,
+                          'routing_terms':sorted(set(re.findall(r'(?i)ClaimHive|CheckForClaimedHive|HiveClaim|PreferredHive|CurrentGatherField|Travel\w*|Walk\w*|Gather\w*|Cannon\w*|Field\w*|Spawn\w*|Path\w*|Move\w*',txt)))[:80]})
+                      recovered=True
+                      break
+              if not recovered:
+                  manifest.append({'path':path,'recovered':False})
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps(manifest[:200],indent=2))
+
+      - name: Search recovered history for exact routing identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            grep -RniE 'Claimed Hive|Travelling To|claimhive|CheckForClaimedHive|HiveClaimMethod|PreferredHiveSlot|CurrentGatherField|WalkAlign|WalkAsync|CannonDiscovery|SpawnedOnHivePad|PathingFailure|red-cannon|gather.nextField|gather.useDipper' history-evidence/history-source || true
+          } > history-evidence/exact-routing-matches.txt
+          cat history-evidence/exact-routing-matches.txt | head -n 1000
+
+      - name: Upload historical source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-upstream-historical-go-source
+          path: history-evidence/
+          if-no-files-found: error
