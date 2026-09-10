@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: python3 -m pip install --disable-pip-version-check pefile capstone
 
-      - name: Trace packed route strings into executable functions
+      - name: Trace route table pointers for cannon to Pine Tree
         shell: python
         run: |
           from pathlib import Path
@@ -39,21 +39,19 @@ jobs:
           from capstone import Cs, CS_ARCH_X86, CS_MODE_64
           from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
 
-          exe=Path('.cache/RevolutionMacro.exe')
-          raw=exe.read_bytes()
-          pe=pefile.PE(str(exe), fast_load=False)
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
           base=int(pe.OPTIONAL_HEADER.ImageBase)
           image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
           sections=[]
           for s in pe.sections:
-              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),
-                  raw=int(s.PointerToRawData), size=int(s.SizeOfRawData), rva=int(s.VirtualAddress),
-                  chars=int(s.Characteristics), data=s.get_data()))
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),raw=int(s.PointerToRawData),
+                  size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),chars=int(s.Characteristics),data=s.get_data()))
 
-          def off2rva(off):
-              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:return off
+          def off2va(off):
+              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:return base+off
               for s in sections:
-                  if s['raw']<=off<s['raw']+s['size']:return s['rva']+off-s['raw']
+                  if s['raw']<=off<s['raw']+s['size']:return base+s['rva']+off-s['raw']
               return None
           def va2off(va):
               rva=va-base
@@ -61,7 +59,7 @@ jobs:
               for s in sections:
                   if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
               return None
-          def preview_va(va,n=220):
+          def ascii_at(va,n=180):
               off=va2off(va)
               if off is None:return ''
               b=raw[off:min(len(raw),off+n)]
@@ -73,148 +71,137 @@ jobs:
                   b=int(e.struct.BeginAddress); en=int(e.struct.EndAddress)
                   if b<en:funcs.append((base+b,base+en))
           except Exception:pass
-          funcs=sorted(set(funcs)); starts=[b for b,_ in funcs]
+          funcs=sorted(set(funcs)); starts=[x[0] for x in funcs]
           def containing(va):
               i=bisect.bisect_right(starts,va)-1
-              if i>=0 and funcs[i][0]<=va<funcs[i][1]:return funcs[i]
-              return None
+              return funcs[i] if i>=0 and funcs[i][0]<=va<funcs[i][1] else None
 
-          needles=[
-            b'pinetree-br', b'blue-cannon', b'red-cannon-logged', b'goto-cannon',
-            b'gather/e_lol.lua', b'CurrentGatherField', b'Travelling To: %s',
-            b'Entering Field: %s', b'Exiting Field: %s', b'afb-target-field',
-            b'destination', b'next-vertex', b'Route Destination: %s', b'Skipping empty route',
-            b'Pine Tree Forest', b'sprinkler_invalid', b'ExecuteWithAlignment',
-            b'RouteForVertexes', b'RouteClosest', b'RouteOptimize'
-          ]
+          needles=[b'pinetree-br',b'blue-cannon',b'goto-cannon',b'next-vertex',b'afb-target-field',
+                   b'Pine Tree Forest',b'gather/e_lol.lua',b'Entering Field: %s',b'Travelling To: %s',
+                   b'Route Destination: %s',b'Skipping empty route']
           occ=[]
           for n in needles:
-              pos=0
+              p=0
               while True:
-                  off=raw.find(n,pos)
+                  off=raw.find(n,p)
                   if off<0:break
-                  rva=off2rva(off)
-                  if rva is not None:occ.append(dict(text=n.decode(),off=off,va=base+rva,length=len(n)))
-                  pos=off+1
+                  va=off2va(off)
+                  if va is not None:occ.append(dict(text=n.decode(),off=off,va=va,length=len(n)))
+                  p=off+1
           occ.sort(key=lambda x:x['va'])
-          occ_vas=[o['va'] for o in occ]
 
           md=Cs(CS_ARCH_X86,CS_MODE_64);md.detail=True
           code=[]
           for s in sections:
               if not (s['chars']&0x20000000):continue
               for ins in md.disasm(s['data'],base+s['rva']):
-                  targets=[]
+                  ts=[]
                   for op in ins.operands:
                       if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
-                          targets.append(ins.address+ins.size+op.mem.disp)
+                          ts.append(ins.address+ins.size+op.mem.disp)
                       elif op.type==X86_OP_IMM:
                           v=int(op.imm)&((1<<64)-1)
-                          if base<=v<base+image_size:targets.append(v)
-                  if targets:code.append(dict(address=ins.address,mnemonic=ins.mnemonic,op_str=ins.op_str,targets=targets))
+                          if base<=v<base+image_size:ts.append(v)
+                  if ts:code.append((ins.address,ins.mnemonic,ins.op_str,ts))
 
-          report=[f'PE image_base=0x{base:x} image_size=0x{image_size:x} pdata_functions={len(funcs)}']
-          report.append(f'LITERAL_OCCURRENCES={len(occ)}')
+          # Find every static qword pointer to the exact start of each high-signal string. Do not assume
+          # Go string-descriptor alignment or a neighboring length field; modern route tables can embed
+          # names inside larger structs/maps.
+          pointers=[]
+          for o in occ:
+              pat=struct.pack('<Q',o['va'])
+              p=0
+              while True:
+                  hit=raw.find(pat,p)
+                  if hit<0:break
+                  pva=off2va(hit)
+                  if pva is not None:
+                      pointers.append(dict(literal=o['text'],literal_va=o['va'],pointer_off=hit,pointer_va=pva))
+                  p=hit+1
+
+          # Also allow a code/data pointer to start up to 4096 bytes before a target literal in Go's packed
+          # string slab. This catches strings represented as suffixes of a larger packed constant.
+          broad=[]
+          for addr,mn,ops,ts in code:
+              for t in ts:
+                  off=va2off(t)
+                  if off is None:continue
+                  for o in occ:
+                      delta=o['va']-t
+                      if 0<=delta<=4096:
+                          pv=ascii_at(t,delta+o['length']+32)
+                          if o['text'] in pv:
+                              broad.append(dict(literal=o['text'],literal_va=o['va'],target_va=t,delta=delta,
+                                  insn_va=addr,mnemonic=mn,op_str=ops,function=containing(addr)))
+
+          # Map static pointer-table locations back to executable references. Search +/-256 because Go's
+          # generated code may address a struct/table base and then index to the string field.
+          pvas=sorted(set(x['pointer_va'] for x in pointers))
+          xrefs=[]
+          for addr,mn,ops,ts in code:
+              for t in ts:
+                  i=bisect.bisect_left(pvas,t-256); j=bisect.bisect_right(pvas,t+256)
+                  for pva in pvas[i:j]:
+                      for x in pointers:
+                          if x['pointer_va']!=pva:continue
+                          xrefs.append(dict(**x,target_va=t,target_delta=t-pva,insn_va=addr,
+                              mnemonic=mn,op_str=ops,function=containing(addr)))
+
+          # Dump qwords around each route-name pointer so neighboring vertex IDs, destination names,
+          # lengths, flags and function pointers are visible as one record rather than isolated strings.
+          neighborhoods=[]
+          for x in pointers:
+              po=x['pointer_off']
+              a=max(0,po-128); z=min(len(raw),po+256)
+              rows=[]
+              q=(a+7)&~7
+              while q+8<=z:
+                  v=struct.unpack_from('<Q',raw,q)[0]
+                  entry={'off':q,'va':off2va(q),'value':v}
+                  if base<=v<base+image_size:
+                      entry['target_preview']=ascii_at(v,120)
+                      entry['target_function']=containing(v)
+                  rows.append(entry);q+=8
+              neighborhoods.append(dict(pointer=x,rows=rows))
+
+          # De-duplicate and select executable functions tied to either static route tables or broad packed strings.
+          def dedupe(items,keys):
+              out=[];seen=set()
+              for x in items:
+                  k=tuple(x.get(q) if not isinstance(x.get(q),list) else tuple(x.get(q)) for q in keys)
+                  if k not in seen:seen.add(k);out.append(x)
+              return out
+          pointers=dedupe(pointers,['literal','pointer_va'])
+          broad=dedupe(broad,['literal','target_va','insn_va'])
+          xrefs=dedupe(xrefs,['literal','pointer_va','insn_va','target_va'])
+          target_funcs=set()
+          for x in broad+xrefs:
+              f=x.get('function')
+              if f:target_funcs.add(tuple(f))
+
+          report=[f'image_base=0x{base:x}',f'pdata_functions={len(funcs)}',f'occurrences={len(occ)}',
+                  f'exact_static_pointers={len(pointers)}',f'broad_code_refs={len(broad)}',f'pointer_table_xrefs={len(xrefs)}']
           for o in occ:report.append('LITERAL '+json.dumps(o,sort_keys=True))
-
-          direct=[]
-          for ci in code:
-              for t in ci['targets']:
-                  i=bisect.bisect_left(occ_vas,t-32)
-                  j=bisect.bisect_right(occ_vas,t+192)
-                  for o in occ[i:j]:
-                      if not (o['va']-192<=t<=o['va']+o['length']):continue
-                      pv=preview_va(t,260)
-                      if o['text'] not in pv:continue
-                      f=containing(ci['address'])
-                      direct.append(dict(literal=o['text'],literal_va=o['va'],target_va=t,
-                          target_delta=t-o['va'],preview=pv[:260],insn_va=ci['address'],
-                          mnemonic=ci['mnemonic'],op_str=ci['op_str'],function=f))
-          seen=set(); direct2=[]
-          for x in direct:
-              k=(x['literal'],x['target_va'],x['insn_va'])
-              if k not in seen:seen.add(k);direct2.append(x)
-          direct=direct2
-          report.append(f'PACKED_DIRECT_XREFS={len(direct)}')
-          for x in direct:report.append('DIRECT '+json.dumps(x,sort_keys=True))
-
-          # Linear scan for ordinary Go string descriptors {data pointer, length}. This avoids a
-          # combinatorial raw.find loop and catches globals/tables whose string starts before a target
-          # sub-literal in Go's packed string slab.
-          descriptors=[]
-          for s in sections:
-              begin=s['raw']; end=min(len(raw),s['raw']+s['size'])
-              # PE sections and Go globals are 8-byte aligned; align relative to file offset.
-              p=(begin+7)&~7
-              while p+16<=end:
-                  sva,length=struct.unpack_from('<QQ',raw,p)
-                  if base<=sva<base+image_size and 1<=length<=320:
-                      soff=va2off(sva)
-                      if soff is not None and soff+length<=len(raw):
-                          left=bisect.bisect_left(occ_vas,sva)
-                          right=bisect.bisect_right(occ_vas,sva+length)
-                          if left<right:
-                              b=raw[soff:soff+length]
-                              if sum(32<=z<127 for z in b)>=max(1,int(len(b)*0.92)):
-                                  txt=b.decode('ascii','replace')
-                                  for o in occ[left:right]:
-                                      if o['va']+o['length']<=sva+length and o['text'] in txt:
-                                          rva=off2rva(p)
-                                          if rva is not None:
-                                              descriptors.append(dict(literal=o['text'],literal_va=o['va'],
-                                                  string_va=sva,string_len=length,string_text=txt,
-                                                  descriptor_off=p,descriptor_va=base+rva))
-                  p+=8
-          seen=set(); desc2=[]
-          for d in descriptors:
-              k=(d['literal'],d['string_va'],d['string_len'],d['descriptor_va'])
-              if k not in seen:seen.add(k);desc2.append(d)
-          descriptors=desc2
-          report.append(f'STRING_DESCRIPTORS={len(descriptors)}')
-          for d in descriptors:report.append('DESC '+json.dumps(d,sort_keys=True))
-
-          desc_xrefs=[]
-          descriptor_vas=sorted(set(d['descriptor_va'] for d in descriptors))
-          desc_by_va={}
-          for d in descriptors:desc_by_va.setdefault(d['descriptor_va'],[]).append(d)
-          for ci in code:
-              for t in ci['targets']:
-                  k=bisect.bisect_left(descriptor_vas,t-64)
-                  m=bisect.bisect_right(descriptor_vas,t+64)
-                  for dva in descriptor_vas[k:m]:
-                      for d in desc_by_va[dva]:
-                          f=containing(ci['address'])
-                          desc_xrefs.append(dict(literal=d['literal'],descriptor_va=dva,target_va=t,
-                              target_delta=t-dva,string_text=d['string_text'],insn_va=ci['address'],
-                              mnemonic=ci['mnemonic'],op_str=ci['op_str'],function=f))
-          seen=set(); dx2=[]
-          for x in desc_xrefs:
-              k=(x['literal'],x['descriptor_va'],x['insn_va'],x['target_va'])
-              if k not in seen:seen.add(k);dx2.append(x)
-          desc_xrefs=dx2
-          report.append(f'DESCRIPTOR_XREFS={len(desc_xrefs)}')
-          for x in desc_xrefs:report.append('DESC_XREF '+json.dumps(x,sort_keys=True))
-
-          targets=set()
-          for x in direct+desc_xrefs:
-              if x['function']:targets.add(tuple(x['function']))
-          Path('route-map/evidence.json').write_text(json.dumps(dict(occurrences=occ,direct=direct,
-              descriptors=descriptors,descriptor_xrefs=desc_xrefs,functions=sorted(targets)),indent=2),encoding='utf-8')
+          for x in pointers:report.append('POINTER '+json.dumps(x,sort_keys=True))
+          for x in broad:report.append('BROAD '+json.dumps(x,sort_keys=True))
+          for x in xrefs:report.append('TABLE_XREF '+json.dumps(x,sort_keys=True))
+          Path('route-map/summary.txt').write_text('\n'.join(report),encoding='utf-8')
+          Path('route-map/evidence.json').write_text(json.dumps(dict(occurrences=occ,pointers=pointers,broad=broad,
+              table_xrefs=xrefs,neighborhoods=neighborhoods,functions=sorted(target_funcs)),indent=2),encoding='utf-8')
 
           lines=[]
-          for b,en in sorted(targets):
+          for b,en in sorted(target_funcs):
               lines.append(f'\n===== FUNCTION 0x{b:x}-0x{en:x} size={en-b} =====')
               data=None
               for s in sections:
-                  sva=base+s['rva']; sev=sva+len(s['data'])
+                  sva=base+s['rva'];sev=sva+len(s['data'])
                   if sva<=b<sev:
-                      a=b-sva; z=min(len(s['data']),en-sva); data=s['data'][a:z];break
+                      aa=b-sva;zz=min(len(s['data']),en-sva);data=s['data'][aa:zz];break
               if data is None:continue
               for i,ins in enumerate(md.disasm(data,b)):
                   lines.append(f'0x{ins.address:016x}: {ins.mnemonic:8s} {ins.op_str}')
                   if i>=3000:lines.append('... truncated ...');break
           Path('route-map/target-disassembly.txt').write_text('\n'.join(lines),encoding='utf-8')
-          Path('route-map/summary.txt').write_text('\n'.join(report),encoding='utf-8')
           print('\n'.join(report[:5000]))
 
       - name: Upload direct route function evidence
