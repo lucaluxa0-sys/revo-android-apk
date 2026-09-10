@@ -1,0 +1,38 @@
+name: Export current Android source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-export-current-android-source.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore archived Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          test -d revo-android/app/src/main/java/com/revolution/android
+      - name: Inventory native source
+        shell: bash
+        run: |
+          set -euo pipefail
+          find revo-android/app/src/main -type f -print | sort | tee /tmp/android-source-files.txt
+      - name: Upload exact reconstructed Android source
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-revo-android-source
+          path: |
+            revo-android/
+            /tmp/android-source-files.txt
+          if-no-files-found: error
