@@ -1,0 +1,77 @@
+name: Recover Revolution Lua pattern codec symbols
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-lua-pattern-codec-symbols.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache codec-symbols
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Extract all internal pattern/codec/package symbol strings
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          strings=[]
+          for m in re.finditer(rb'[\x20-\x7e]{4,}',raw):
+              strings.append((m.start(),m.group().decode('ascii','replace')))
+
+          prefixes=[
+            'github.com/nosyliam/revolution/lua/pm',
+            'github.com/nosyliam/revolution/lua/ast/codec',
+            'github.com/nosyliam/revolution/lua/ast',
+            'github.com/nosyliam/revolution/lua/',
+          ]
+          out=[]
+          for prefix in prefixes:
+              hits=[(o,s) for o,s in strings if prefix in s]
+              out.append(f'===== PREFIX {prefix} count={len(hits)} =====')
+              out.extend(f'0x{o:x}: {s}' for o,s in hits)
+
+          # Function/type strings with strong runtime pattern or routing semantics.
+          rx=re.compile(r'github\.com/nosyliam/revolution/.+(?:Pattern|pattern|Route|route|Hive|hive|Walk|walk|Navigate|navigate|Cannon|cannon|Spawn|spawn|Dipper|dipper|Decompress|decompress|Decode|decode|Compile|compile|Parse|parse)')
+          hits=[(o,s) for o,s in strings if rx.search(s)]
+          out.append(f'===== ALL STRONG REVOLUTION SYMBOLS count={len(hits)} =====')
+          out.extend(f'0x{o:x}: {s}' for o,s in hits)
+
+          # The name table is dense; capture +/-8 KiB around known pm/codec names to expose adjacent names
+          # even when those adjacent names do not themselves contain the package prefix.
+          anchor_offsets=[]
+          for o,s in strings:
+              if 'github.com/nosyliam/revolution/lua/pm.parsePattern' in s or 'github.com/nosyliam/revolution/lua/ast/codec.walkStrings' in s:
+                  anchor_offsets.append(o)
+          for a in anchor_offsets:
+              lo=max(0,a-8192); hi=min(len(raw),a+8192)
+              out.append(f'===== PRINTABLE NAME-TABLE WINDOW around 0x{a:x} =====')
+              for o,s in strings:
+                  if lo<=o<hi:
+                      out.append(f'0x{o:x}: {s}')
+
+          Path('codec-symbols/symbols.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out[:2500]))
+
+      - name: Upload codec symbol evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-lua-pattern-codec-symbols
+          path: codec-symbols/symbols.txt
+          if-no-files-found: error
