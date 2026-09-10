@@ -52,7 +52,6 @@ jobs:
           def u32(off): return struct.unpack_from('<I',raw,off)[0]
           def i32(off): return struct.unpack_from('<i',raw,off)[0]
 
-          # firstmoduledata was independently recovered in the prior exact-binary diagnostic.
           minpc=0x1400014a0; best=None; p=0
           while True:
               hit=raw.find(struct.pack('<Q',minpc),p)
@@ -66,10 +65,10 @@ jobs:
           if not best or best[0]<4: raise SystemExit('moduledata recovery failed')
           md=best[1]
 
-          # Layout verified against the exact executable in the direct-moduledata probe:
-          # types @ +296, etypes @ +304, typelinks slice @ +352 (ptr,len,cap).
+          # Exact executable layout: types +296, etypes +304; typelinks is the
+          # second slice after the one-word plugin/type-map field, at +360.
           types=q(md+296); etypes=q(md+304)
-          typelinks=q(md+352); typelinks_len=q(md+360); typelinks_cap=q(md+368)
+          typelinks=q(md+360); typelinks_len=q(md+368); typelinks_cap=q(md+376)
           print(f'moduledata={base+md:#x} types={types:#x} etypes={etypes:#x} typelinks={typelinks:#x} len={typelinks_len} cap={typelinks_cap}')
           if not (base<=types<etypes<=base+int(pe.OPTIONAL_HEADER.SizeOfImage)): raise SystemExit('invalid types range')
           if not (0<typelinks_len<100000 and va2off(typelinks) is not None): raise SystemExit('invalid typelinks')
@@ -87,7 +86,6 @@ jobs:
               no=i32(toff+40)
               nva=types+no; noff=va2off(nva)
               if noff is None or noff+2>len(raw): return None
-              flags=raw[noff]
               try: ln,nv=read_varint(noff+1)
               except Exception:return None
               a=noff+1+nv; z=a+ln
@@ -110,8 +108,6 @@ jobs:
                   row2=dict(row); row2['matched_tag']=hx if hx in wanted else rev; matches.append(row2)
           Path('type-evidence/all-types.json').write_text(json.dumps(rows,indent=2),encoding='utf-8')
           Path('type-evidence/tag-hash-matches.json').write_text(json.dumps(matches,indent=2),encoding='utf-8')
-
-          # Also surface all Revolution/Lua-adjacent type names, useful if tags use a separate hash.
           interesting=[r for r in rows if any(k in r['name'].lower() for k in ['revo_', 'revolution/lua', 'lua.', 'ast.', 'expr', 'stmt', 'statement', 'call', 'number', 'string'])]
           Path('type-evidence/interesting-types.json').write_text(json.dumps(interesting,indent=2),encoding='utf-8')
           print('types decoded',len(rows),'tag hash matches',len(matches),'interesting',len(interesting))
