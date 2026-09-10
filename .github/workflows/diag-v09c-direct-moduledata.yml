@@ -26,6 +26,9 @@ jobs:
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
 
+      - name: Install PE parser
+        run: python3 -m pip install --disable-pip-version-check pefile
+
       - name: Recover moduledata, functab, and names without pclntab header
         shell: python
         run: |
@@ -70,8 +73,6 @@ jobs:
               if not s or len(s)>limit:return None
               return s
 
-          # The exact binary's first executable Go function begins at this address. GoReSym independently
-          # identified this same minpc before rejecting the obfuscated pclntab header.
           minpc=0x1400014a0
           needle=struct.pack('<Q',minpc)
           candidates=[]
@@ -79,7 +80,6 @@ jobs:
           while True:
               hit=raw.find(needle,p)
               if hit<0:break
-              # moduledata.minpc is +160 on Go 1.18+ layouts used by contemporary Go.
               md_off=hit-160
               md_va=off2va(md_off)
               if md_off>=0 and md_va is not None and md_off+420<len(raw):
@@ -135,7 +135,7 @@ jobs:
           recoveries.sort(key=lambda x:x[0],reverse=True)
           best_funcs=[]; best=None
           if recoveries:
-              _,best,best_funcs,route_count=recoveries[-1] if False else recoveries[0]
+              _,best,best_funcs,route_count=recoveries[0]
               report.append('BEST_MODULEDATA '+json.dumps(best,sort_keys=True))
               report.append(f'BEST_FUNCTIONS={len(best_funcs)} ROUTE_NAME_MATCHES={route_count}')
               rx=re.compile(r'Route|route|Routing|routing|Field|field|Gather|gather|Cannon|cannon|Hive|hive|Walk|walk|Navigate|navigate|Path|path|Spawn|spawn|Revo_Heafad825296ca85|Revo_C6b27ea38537a940')
