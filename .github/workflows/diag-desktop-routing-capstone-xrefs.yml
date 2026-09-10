@@ -30,218 +30,148 @@ jobs:
         shell: bash
         run: python3 -m pip install --disable-pip-version-check pefile capstone
 
-      - name: Recover direct and Go-descriptor routing references
+      - name: Rank code targets nearest high-signal routing literals
         shell: python
         run: |
           from pathlib import Path
-          import bisect, json, struct
+          import bisect, json, re
           import pefile
           from capstone import Cs, CS_ARCH_X86, CS_MODE_64
           from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
 
-          exe = Path('.cache/RevolutionMacro.exe')
-          raw = exe.read_bytes()
-          pe = pefile.PE(str(exe), fast_load=False)
-          image_base = int(pe.OPTIONAL_HEADER.ImageBase)
-
-          needles = [
-              b'Claimed Hive: %d', b'Travelling To: %s', b'claimhive',
-              b'red-cannon-logged', b'hive-side-check', b'red-cannon',
-              b'gather.nextField', b'gather.useDipper', b'PathingFailure',
-              b'SpawnedOnHivePad', b'CheckForClaimedHive', b'HiveClaimMethod',
-              b'PreferredHiveSlot', b'CurrentGatherField', b'WalkAlign',
-              b'WalkAsync', b'CannonDiscovery',
-          ]
+          raw = Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe = pefile.PE('.cache/RevolutionMacro.exe', fast_load=False)
+          base = int(pe.OPTIONAL_HEADER.ImageBase)
+          needles = [b'Claimed Hive: %d', b'Travelling To: %s', b'claimhive', b'red-cannon-logged',
+                     b'gather.nextField', b'gather.useDipper', b'CurrentGatherField', b'WalkAlign', b'WalkAsync']
 
           sections=[]
           for s in pe.sections:
-              sections.append({
-                  'name':s.Name.rstrip(b'\0').decode('ascii','replace'),
-                  'raw_start':int(s.PointerToRawData), 'raw_size':int(s.SizeOfRawData),
-                  'rva':int(s.VirtualAddress), 'vsize':int(s.Misc_VirtualSize),
-                  'chars':int(s.Characteristics), 'data':s.get_data(),
-              })
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),
+                  raw=int(s.PointerToRawData), size=int(s.SizeOfRawData), rva=int(s.VirtualAddress),
+                  chars=int(s.Characteristics), data=s.get_data()))
 
-          def file_offset_to_rva(off):
+          def off_to_rva(off):
               if off < pe.OPTIONAL_HEADER.SizeOfHeaders: return off
               for s in sections:
-                  if s['raw_start'] <= off < s['raw_start'] + s['raw_size']:
-                      return s['rva'] + (off-s['raw_start'])
+                  if s['raw'] <= off < s['raw']+s['size']:
+                      return s['rva'] + off-s['raw']
               return None
-
-          def section_for_off(off):
+          def rva_to_off(rva):
+              if rva < pe.OPTIONAL_HEADER.SizeOfHeaders: return rva
               for s in sections:
-                  if s['raw_start'] <= off < s['raw_start'] + s['raw_size']:
-                      return s['name']
-              return '<headers/overlay>'
+                  span=max(s['size'],len(s['data']))
+                  if s['rva'] <= rva < s['rva']+span:
+                      return s['raw'] + rva-s['rva']
+              return None
+          def sec_for_rva(rva):
+              for s in sections:
+                  if s['rva'] <= rva < s['rva']+max(s['size'],len(s['data'])): return s['name']
+              return '<none>'
 
           strings=[]
-          for needle in needles:
-              pos=0
+          for n in needles:
+              p=0
               while True:
-                  off=raw.find(needle,pos)
+                  off=raw.find(n,p)
                   if off<0: break
-                  rva=file_offset_to_rva(off)
-                  if rva is not None:
-                      strings.append({'text':needle.decode('ascii'),'file_offset':off,
-                          'rva':rva,'va':image_base+rva,'length':len(needle),
-                          'section':section_for_off(off)})
-                  pos=off+1
+                  rva=off_to_rva(off)
+                  if rva is not None: strings.append(dict(text=n.decode(),off=off,rva=rva,va=base+rva,length=len(n)))
+                  p=off+1
 
-          # Windows x64 runtime function boundaries from .pdata.
           funcs=[]
           try:
               for e in pe.DIRECTORY_ENTRY_EXCEPTION:
                   b=int(e.struct.BeginAddress); en=int(e.struct.EndAddress)
                   if b<en: funcs.append((b,en))
           except Exception: pass
-          funcs=sorted(set(funcs)); func_starts=[x[0] for x in funcs]
-          def containing_func(rva):
-              if not funcs: return None
-              i=bisect.bisect_right(func_starts,rva)-1
-              if i>=0:
-                  b,en=funcs[i]
-                  if b<=rva<en: return (b,en)
+          funcs=sorted(set(funcs)); starts=[x[0] for x in funcs]
+          def containing(rva):
+              i=bisect.bisect_right(starts,rva)-1
+              if i>=0 and funcs[i][0] <= rva < funcs[i][1]: return funcs[i]
               return None
 
-          # Build candidate intermediate addresses. Go often materializes a string through
-          # a static {data pointer, length} header or another pointer cell instead of
-          # referencing the raw bytes directly from code.
-          candidates=[]
-          seen_candidates=set()
-          def add_candidate(st, off, kind, detail=''):
-              rva=file_offset_to_rva(off)
-              if rva is None: return
-              key=(st['text'],st['rva'],rva,kind)
-              if key in seen_candidates: return
-              seen_candidates.add(key)
-              candidates.append({'string':st['text'],'string_rva':st['rva'],
-                  'kind':kind,'file_offset':off,'rva':rva,'va':image_base+rva,
-                  'section':section_for_off(off),'detail':detail})
-
-          for st in strings:
-              # raw bytes are always first-level candidates
-              add_candidate(st, st['file_offset'], 'raw-string')
-              encodings=[('va64',struct.pack('<Q',st['va'])),('rva64',struct.pack('<Q',st['rva'])),
-                         ('rva32',struct.pack('<I',st['rva'] & 0xffffffff))]
-              first_level=[]
-              for enc_name,enc in encodings:
-                  p=0
-                  while True:
-                      off=raw.find(enc,p)
-                      if off<0: break
-                      p=off+1
-                      # Avoid the occurrence being the literal text itself by requiring a mapped cell.
-                      rva=file_offset_to_rva(off)
-                      if rva is None: continue
-                      length_match=False
-                      if off+16<=len(raw) and struct.unpack_from('<Q',raw,off+8)[0]==st['length']:
-                          length_match=True
-                      if off+12<=len(raw) and struct.unpack_from('<I',raw,off+8)[0]==st['length']:
-                          length_match=True
-                      kind='go-string-descriptor' if length_match else 'pointer-cell'
-                      add_candidate(st,off,kind,enc_name + ('+length' if length_match else ''))
-                      first_level.append((off,rva,kind))
-              # one extra pointer layer: global/table -> descriptor/pointer cell
-              for off1,rva1,kind1 in first_level[:400]:
-                  va1=image_base+rva1
-                  for enc_name,enc in [('cell-va64',struct.pack('<Q',va1)),('cell-rva64',struct.pack('<Q',rva1))]:
-                      p=0
-                      hits=0
-                      while True:
-                          off2=raw.find(enc,p)
-                          if off2<0 or hits>=100: break
-                          p=off2+1; hits+=1
-                          add_candidate(st,off2,'pointer-to-'+kind1,enc_name)
-
-          # Map candidate VAs to owning strings. Exact target is preferred; allow targets
-          # into the raw string body only for raw-string candidates.
-          by_exact={}
-          raw_ranges=[]
-          for c in candidates:
-              by_exact.setdefault(c['va'],[]).append(c)
-          for st in strings:
-              raw_ranges.append((st['va'],st['va']+st['length'],st))
-
           md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
-          executable=[]; xrefs=[]
-          seen_xrefs=set()
+          code=[]
           for s in sections:
-              if not (s['chars'] & 0x20000000): continue
-              executable.append(s)
-              sec_va=image_base+s['rva']
-              for insn in md.disasm(s['data'],sec_va):
+              if not s['chars'] & 0x20000000: continue
+              for insn in md.disasm(s['data'],base+s['rva']):
                   targets=[]
                   for op in insn.operands:
                       if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
-                          targets.append(('rip',insn.address+insn.size+op.mem.disp))
+                          targets.append(insn.address+insn.size+op.mem.disp)
                       elif op.type==X86_OP_IMM:
-                          targets.append(('imm',int(op.imm)&((1<<64)-1)))
-                  if not targets: continue
-                  matched=[]
-                  for mode,t in targets:
-                      for c in by_exact.get(t,[]): matched.append((mode,t,c))
-                      for lo,hi,st in raw_ranges:
-                          if lo<=t<hi:
-                              matched.append((mode,t,{'string':st['text'],'string_rva':st['rva'],
-                                  'kind':'raw-string-body','rva':st['rva'],'va':st['va'],
-                                  'file_offset':st['file_offset'],'section':st['section'],'detail':''}))
-                  for mode,t,c in matched:
-                      rva=insn.address-image_base; fr=containing_func(rva)
-                      key=(c['string'],c['string_rva'],c['kind'],c['rva'],rva)
-                      if key in seen_xrefs: continue
-                      seen_xrefs.add(key)
-                      xrefs.append({'string':c['string'],'string_rva':c['string_rva'],
-                          'via_kind':c['kind'],'via_rva':c['rva'],'via_section':c.get('section',''),
-                          'target_mode':mode,'insn_va':insn.address,'insn_rva':rva,
-                          'mnemonic':insn.mnemonic,'op_str':insn.op_str,
-                          'function':None if fr is None else {'begin_rva':fr[0],'end_rva':fr[1],'size':fr[1]-fr[0]}})
+                          v=int(op.imm)&((1<<64)-1)
+                          if base <= v < base+int(pe.OPTIONAL_HEADER.SizeOfImage): targets.append(v)
+                  if targets:
+                      code.append(dict(va=insn.address,rva=insn.address-base,mn=insn.mnemonic,op=insn.op_str,targets=targets))
 
-          unique_funcs={}
-          for x in xrefs:
-              f=x['function']
-              if f: unique_funcs[(f['begin_rva'],f['end_rva'])]=f
-
-          def bytes_for_rva(begin,end):
-              for s in executable:
-                  if s['rva']<=begin<s['rva']+len(s['data']):
-                      a=begin-s['rva']; b=min(len(s['data']),end-s['rva'])
-                      return s['name'],s['data'][a:b],image_base+begin
-              return None,b'',image_base+begin
-
-          lines=[f'image_base=0x{image_base:x}',f'exception_function_ranges={len(funcs)}',
-                 f'string_occurrences={len(strings)}',f'candidate_cells={len(candidates)}']
+          # For each literal, rank every code reference to mapped data within +/-16 KiB.
+          ranked={}
           for st in strings:
-              lines.append(f"STRING {st['text']!r} section={st['section']} file=0x{st['file_offset']:x} rva=0x{st['rva']:x}")
-          interesting=[c for c in candidates if c['kind']!='raw-string']
-          lines.append(f'indirect_candidates={len(interesting)}')
-          for c in interesting[:4000]:
-              lines.append(f"CANDIDATE {c['string']!r} kind={c['kind']} section={c['section']} rva=0x{c['rva']:x} detail={c['detail']}")
-          lines.append(f'xrefs={len(xrefs)}')
-          for x in xrefs:
-              f=x['function']; fs='<none>' if not f else f"0x{f['begin_rva']:x}-0x{f['end_rva']:x} size={f['size']}"
-              lines.append(f"XREF {x['string']!r} via={x['via_kind']}@0x{x['via_rva']:x} insn=0x{x['insn_rva']:x} {x['mnemonic']} {x['op_str']} func={fs}")
+              hits=[]
+              for ci in code:
+                  for target in ci['targets']:
+                      d=target-st['va']
+                      if abs(d)<=16384:
+                          trva=target-base
+                          hits.append(dict(distance=d,target_rva=trva,target_section=sec_for_rva(trva),
+                              insn_rva=ci['rva'],mnemonic=ci['mn'],op_str=ci['op'],function=containing(ci['rva'])))
+              # prefer targets nearest literal, then before/at literal, then stable instruction RVA
+              hits.sort(key=lambda h:(abs(h['distance']), 0 if h['distance']<=0 else 1, h['insn_rva']))
+              ranked[f"{st['text']}@{st['rva']:x}"]=hits[:80]
 
-          for (begin,end),f in sorted(unique_funcs.items()):
-              name,data,va=bytes_for_rva(begin,end)
-              refs=[x for x in xrefs if x['function'] and x['function']['begin_rva']==begin and x['function']['end_rva']==end]
-              lines += ['',f'===== RUNTIME FUNCTION rva=0x{begin:x}-0x{end:x} size={end-begin} section={name} =====',
-                        'REF_STRINGS='+', '.join(sorted(set(x['string'] for x in refs)))]
+          # ASCII neighborhood helps tell whether target points to start of a packed/concatenated string slab.
+          def ascii_window(st, radius=512):
+              a=max(0,st['off']-radius); b=min(len(raw),st['off']+st['length']+radius)
+              chunk=raw[a:b]
+              txt=''.join(chr(x) if 32<=x<127 else '.' for x in chunk)
+              return dict(file_start=a,literal_offset=st['off']-a,text=txt)
+
+          selected_funcs={}
+          for key,hits in ranked.items():
+              for h in hits[:12]:
+                  if h['function']:
+                      selected_funcs[tuple(h['function'])]=True
+
+          # Disassemble complete candidate functions, but cap output.
+          def func_bytes(b,en):
+              for s in sections:
+                  if (s['chars']&0x20000000) and s['rva']<=b<s['rva']+len(s['data']):
+                      a=b-s['rva']; z=min(len(s['data']),en-s['rva'])
+                      return s['name'],s['data'][a:z],base+b
+              return '<none>',b'',base+b
+
+          lines=[f'image_base=0x{base:x}',f'code_instructions_with_targets={len(code)}',f'string_occurrences={len(strings)}']
+          for st in strings:
+              key=f"{st['text']}@{st['rva']:x}"
+              lines += ['',f"===== LITERAL {st['text']!r} rva=0x{st['rva']:x} len={st['length']} ====="]
+              w=ascii_window(st,256)
+              lines.append(f"ASCII_WINDOW file_start=0x{w['file_start']:x} literal_at=+0x{w['literal_offset']:x}: {w['text']}")
+              hits=ranked[key]
+              lines.append(f'NEARBY_TARGETS={len(hits)} (top 80 within +/-0x4000)')
+              for h in hits:
+                  f=h['function']; fs='<none>' if not f else f"0x{f[0]:x}-0x{f[1]:x}"
+                  lines.append(f"NEAR distance={h['distance']:+d} target=0x{h['target_rva']:x} sec={h['target_section']} insn=0x{h['insn_rva']:x} {h['mnemonic']} {h['op_str']} func={fs}")
+
+          for (b,en) in sorted(selected_funcs):
+              name,data,va=func_bytes(b,en)
+              lines += ['',f'===== CANDIDATE FUNCTION 0x{b:x}-0x{en:x} size={en-b} sec={name} =====']
               count=0
               for insn in md.disasm(data,va):
-                  marker='  <XREF>' if any(x['insn_va']==insn.address for x in refs) else ''
-                  lines.append(f"0x{insn.address-image_base:08x}: {insn.mnemonic:8s} {insn.op_str}{marker}")
+                  lines.append(f"0x{insn.address-base:08x}: {insn.mnemonic:8s} {insn.op_str}")
                   count+=1
-                  if count>=4000:
-                      lines.append('... function disassembly truncated at 4000 instructions ...'); break
+                  if count>=1600:
+                      lines.append('... truncated ...'); break
 
-          Path('capstone-routing/summary.txt').write_text('\n'.join(lines),encoding='utf-8')
-          Path('capstone-routing/xrefs.json').write_text(json.dumps({'strings':strings,'candidates':candidates,'xrefs':xrefs},indent=2),encoding='utf-8')
-          print('\n'.join(lines[:1600]))
+          obj={'strings':strings,'ranked':ranked,'selected_functions':[list(k) for k in selected_funcs]}
+          Path('capstone-routing/nearest.json').write_text(json.dumps(obj,indent=2),encoding='utf-8')
+          Path('capstone-routing/nearest.txt').write_text('\n'.join(lines),encoding='utf-8')
+          print('\n'.join(lines[:2200]))
 
-      - name: Upload Capstone routing evidence
+      - name: Upload nearest-xref routing evidence
         uses: actions/upload-artifact@v4
         with:
-          name: revolution-desktop-routing-capstone-xrefs
+          name: revolution-desktop-routing-nearest-xrefs
           path: capstone-routing/
           if-no-files-found: error
