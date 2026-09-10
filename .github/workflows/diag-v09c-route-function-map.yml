@@ -1,0 +1,236 @@
+name: Recover v0.9c routing function map
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-route-function-map.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache route-map
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Install PE and disassembly helpers
+        shell: bash
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Recover pclntab names and exact routing-literal xrefs
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, json, re, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_REG_RIP
+
+          exe=Path('.cache/RevolutionMacro.exe')
+          raw=exe.read_bytes()
+          pe=pefile.PE(str(exe),fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[]
+          for s in pe.sections:
+              sections.append(dict(name=s.Name.rstrip(b'\0').decode('ascii','replace'),
+                  raw=int(s.PointerToRawData), size=int(s.SizeOfRawData), rva=int(s.VirtualAddress),
+                  chars=int(s.Characteristics), data=s.get_data()))
+
+          def off2rva(off):
+              if off < pe.OPTIONAL_HEADER.SizeOfHeaders:return off
+              for s in sections:
+                  if s['raw']<=off<s['raw']+s['size']:return s['rva']+off-s['raw']
+              return None
+          def rva2off(rva):
+              if rva < pe.OPTIONAL_HEADER.SizeOfHeaders:return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+max(s['size'],len(s['data'])):
+                      return s['raw']+rva-s['rva']
+              return None
+          def cstr(off,limit=800):
+              if off is None or off<0 or off>=len(raw): return None
+              z=raw.find(b'\0',off,min(len(raw),off+limit))
+              if z<0:z=min(len(raw),off+limit)
+              b=raw[off:z]
+              if not b:return ''
+              try:s=b.decode('utf-8')
+              except Exception:return None
+              if not all((32<=ord(c)<127) or ord(c)>=128 for c in s):return None
+              return s
+
+          # Go 1.18+ pcHeader magics. Garble damaged moduledata in this executable,
+          # so recover directly from the pclntab bytes instead of trusting moduledata.
+          magics=[0xfffffff0,0xfffffff1,0xfffffffa,0xfffffffb]
+          candidates=[]
+          for off in range(0,len(raw)-72):
+              if off%4: continue
+              magic=struct.unpack_from('<I',raw,off)[0]
+              if magic not in magics: continue
+              pad1,pad2,minlc,ptr=raw[off+4:off+8]
+              if pad1 or pad2 or ptr not in (4,8) or minlc not in (1,2,4):continue
+              try:
+                  if ptr==8:
+                      vals=struct.unpack_from('<QQQQQQQ',raw,off+8)
+                  else:
+                      vals=struct.unpack_from('<IIIIIII',raw,off+8)
+              except struct.error:continue
+              nfunc,nfiles,text_start,funcname_off,cu_off,filetab_off,pctab_off=vals
+              # pclnOffset is one more pointer after the seven above.
+              try:pcln_off=struct.unpack_from('<Q' if ptr==8 else '<I',raw,off+8+7*ptr)[0]
+              except struct.error:continue
+              if not (1000<nfunc<500000 and 0<nfiles<500000):continue
+              if not (base<=text_start<base+image_size):continue
+              if not all(0<x<len(raw) for x in (funcname_off,cu_off,filetab_off,pctab_off,pcln_off)):continue
+              candidates.append(dict(off=off,magic=magic,ptr=ptr,minlc=minlc,nfunc=nfunc,nfiles=nfiles,
+                                     text_start=text_start,funcname_off=funcname_off,cu_off=cu_off,
+                                     filetab_off=filetab_off,pctab_off=pctab_off,pcln_off=pcln_off))
+
+          report=[]
+          report.append('PE image_base=0x%x image_size=0x%x' % (base,image_size))
+          report.append('pcHeader candidates=%d' % len(candidates))
+          for c in candidates:
+              report.append('PCH '+json.dumps(c,sort_keys=True))
+
+          recovered=[]
+          chosen=None
+          for c in candidates:
+              hdr=c['off']; fnbase=hdr+c['funcname_off']; pclnbase=hdr+c['pcln_off']
+              # Go 1.18+ functab is nfunc+1 pairs of uint32 entryOff/funcoff at pclnbase.
+              # Try both possible _func offset origins and score names; the correct origin
+              # produces thousands of recognizable Go function names.
+              for origin_name,origin in [('pclnbase',pclnbase),('header',hdr)]:
+                  rows=[]; good=0; app=0
+                  maxn=min(int(c['nfunc']),500000)
+                  if pclnbase+(maxn+1)*8>len(raw):continue
+                  for i in range(maxn):
+                      entryoff,funcoff=struct.unpack_from('<II',raw,pclnbase+i*8)
+                      fo=origin+funcoff
+                      if fo<0 or fo+8>len(raw):continue
+                      nameoff=struct.unpack_from('<i',raw,fo+4)[0]
+                      name=cstr(fnbase+nameoff,600)
+                      if not name or len(name)>550:continue
+                      if re.match(r'^(?:runtime\.|internal/|github\.com/|golang\.org/|main\.|revo_[A-Za-z0-9_])',name):good+=1
+                      if ('github.com/nosyliam/revolution' in name or name.startswith('revo_')):app+=1
+                      rows.append(dict(index=i,entryoff=entryoff,address=c['text_start']+entryoff,
+                                       funcoff=funcoff,nameoff=nameoff,name=name))
+                  report.append('PCLN_SCORE header=0x%x origin=%s rows=%d recognizable=%d app=%d' % (hdr,origin_name,len(rows),good,app))
+                  score=(app,good,len(rows))
+                  if chosen is None or score>chosen[0]:chosen=(score,c,origin_name,rows)
+
+          if chosen:
+              score,c,origin_name,recovered=chosen
+              report.append('CHOSEN header=0x%x origin=%s score=%r functions=%d' % (c['off'],origin_name,score,len(recovered)))
+          else:
+              report.append('NO_VALID_PCLNTAB_RECOVERY')
+
+          Path('route-map/function-map.json').write_text(json.dumps(recovered,indent=2),encoding='utf-8')
+          route_rx=re.compile(r'Route|route|Routing|routing|Field|field|Gather|gather|Cannon|cannon|Hive|hive|Walk|walk|Navigate|navigate|Path|path|Spawn|spawn|Parachute|parachute')
+          route_funcs=[r for r in recovered if route_rx.search(r['name'])]
+          report.append('ROUTING_FUNCTIONS=%d' % len(route_funcs))
+          for r in route_funcs:
+              report.append('FUNC 0x%x %s' % (r['address'],r['name']))
+
+          starts=sorted((r['address'],r) for r in recovered)
+          start_addrs=[x[0] for x in starts]
+          def function_for_va(va):
+              i=bisect.bisect_right(start_addrs,va)-1
+              if i<0:return None
+              return starts[i][1]
+
+          needles=[
+            b'pinetree-br', b'blue-cannon', b'red-cannon-logged', b'goto-cannon',
+            b'gather/e_lol.lua', b'CurrentGatherField', b'Travelling To: %s',
+            b'Entering Field: %s', b'Exiting Field: %s', b'afb-target-field',
+            b'destination', b'next-vertex', b'Route Destination: %s', b'Skipping empty route',
+            b'Pine Tree Forest', b'sprinkler_invalid', b'ExecuteWithAlignment'
+          ]
+          occurrences=[]
+          for n in needles:
+              pos=0
+              while True:
+                  off=raw.find(n,pos)
+                  if off<0:break
+                  rva=off2rva(off)
+                  if rva is not None:occurrences.append(dict(text=n.decode(),off=off,rva=rva,va=base+rva,length=len(n)))
+                  pos=off+1
+
+          md=Cs(CS_ARCH_X86,CS_MODE_64);md.detail=True
+          insns=[]
+          for s in sections:
+              if not (s['chars']&0x20000000):continue
+              for ins in md.disasm(s['data'],base+s['rva']):
+                  targets=[]
+                  for op in ins.operands:
+                      if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                          targets.append(ins.address+ins.size+op.mem.disp)
+                      elif op.type==X86_OP_IMM:
+                          v=int(op.imm)&((1<<64)-1)
+                          if base<=v<base+image_size:targets.append(v)
+                  if targets:insns.append((ins.address,ins.mnemonic,ins.op_str,targets))
+
+          xrefs=[]
+          for o in occurrences:
+              for addr,mn,op,targets in insns:
+                  for t in targets:
+                      # Constants can reference the beginning or an interior offset of a packed Go string slab.
+                      if o['va']<=t<o['va']+o['length']:
+                          f=function_for_va(addr)
+                          xrefs.append(dict(literal=o['text'],literal_va=o['va'],target_va=t,insn_va=addr,
+                                           mnemonic=mn,op_str=op,function=None if f is None else f['name'],
+                                           function_va=None if f is None else f['address']))
+          report.append('EXACT_LITERAL_XREFS=%d' % len(xrefs))
+          for x in xrefs:report.append('XREF '+json.dumps(x,sort_keys=True))
+          Path('route-map/literal-xrefs.json').write_text(json.dumps(dict(occurrences=occurrences,xrefs=xrefs),indent=2),encoding='utf-8')
+
+          # Dump complete disassembly for every recovered function that directly references
+          # a routing literal plus named router/graph functions. This keeps the next step source-grounded.
+          target_addrs=set()
+          for x in xrefs:
+              if x['function_va'] is not None:target_addrs.add(x['function_va'])
+          for r in route_funcs:
+              if any(k in r['name'] for k in ['.Route','RouteToAny','RouteClosest','RouteOptimize','RouteForVertexes','ExecuteWithAlignment']):
+                  target_addrs.add(r['address'])
+
+          # Map executable bytes by VA and disassemble until the next recovered function start.
+          target_lines=[]
+          for va in sorted(target_addrs):
+              f=function_for_va(va)
+              if f is None or f['address']!=va:continue
+              idx=bisect.bisect_right(start_addrs,va)
+              end=start_addrs[idx] if idx<len(start_addrs) else va+0x4000
+              end=min(end,va+0x10000)
+              data=None
+              for s in sections:
+                  sva=base+s['rva']; sev=sva+len(s['data'])
+                  if sva<=va<sev:
+                      a=va-sva; z=min(len(s['data']),end-sva); data=s['data'][a:z];break
+              if data is None:continue
+              target_lines.append('\n===== FUNCTION 0x%x %s end=0x%x =====' % (va,f['name'],end))
+              for j,ins in enumerate(md.disasm(data,va)):
+                  target_lines.append('0x%016x: %-8s %s' % (ins.address,ins.mnemonic,ins.op_str))
+                  if j>=2500:
+                      target_lines.append('... truncated ...');break
+          Path('route-map/target-disassembly.txt').write_text('\n'.join(target_lines),encoding='utf-8')
+          Path('route-map/summary.txt').write_text('\n'.join(report),encoding='utf-8')
+          print('\n'.join(report[:4000]))
+
+      - name: Upload direct route function evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-route-function-map
+          path: route-map/
+          if-no-files-found: error
