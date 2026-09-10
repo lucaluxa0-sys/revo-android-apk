@@ -37,22 +37,58 @@ jobs:
           (cd /tmp/GoReSym && go build -o /tmp/goresym .)
           /tmp/goresym -about | head -n 30
 
-      - name: Recover Go metadata
+      - name: Recover Go metadata with progressively simpler modes
         shell: bash
         run: |
-          set -euo pipefail
-          /tmp/goresym -t -p -strings .cache/RevolutionMacro.exe > routing-symbols/goresym.json
-          test -s routing-symbols/goresym.json
+          set -u
+          attempts=(
+            'full|-t -p -strings'
+            'paths|-p'
+            'strings|-strings'
+            'basic|'
+          )
+          : > routing-symbols/attempts.txt
+          for item in "${attempts[@]}"; do
+            name="${item%%|*}"
+            flags="${item#*|}"
+            echo "===== $name flags=[$flags] =====" | tee -a routing-symbols/attempts.txt
+            set +e
+            if [ -n "$flags" ]; then
+              /tmp/goresym $flags .cache/RevolutionMacro.exe > "routing-symbols/$name.json" 2> "routing-symbols/$name.err"
+            else
+              /tmp/goresym .cache/RevolutionMacro.exe > "routing-symbols/$name.json" 2> "routing-symbols/$name.err"
+            fi
+            rc=$?
+            set -e
+            echo "exit=$rc stdout_bytes=$(wc -c < routing-symbols/$name.json) stderr_bytes=$(wc -c < routing-symbols/$name.err)" | tee -a routing-symbols/attempts.txt
+            cat "routing-symbols/$name.err" | head -n 80 | tee -a routing-symbols/attempts.txt || true
+          done
+          cat routing-symbols/attempts.txt
 
-      - name: Extract routing-specific functions files and strings
+      - name: Extract routing-specific functions files and strings from any valid recovery
         shell: python
         run: |
           import json, re
           from pathlib import Path
-          p=Path('routing-symbols/goresym.json')
-          data=json.loads(p.read_text(errors='replace'))
-          terms=re.compile(r'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|dipper|sprinkler|character',re.I)
+          root=Path('routing-symbols')
+          candidates=[]
+          for name in ['full','paths','strings','basic']:
+              p=root/f'{name}.json'
+              try:
+                  d=json.loads(p.read_text(errors='replace'))
+                  if isinstance(d,dict): candidates.append((p.stat().st_size,name,d))
+              except Exception:
+                  pass
           out=[]
+          if not candidates:
+              out.append('NO_VALID_GORESYM_JSON')
+              out.append((root/'attempts.txt').read_text(errors='replace'))
+              (root/'routing-summary.txt').write_text('\n'.join(out))
+              print('\n'.join(out))
+              raise SystemExit(0)
+          _,mode,data=max(candidates)
+          terms=re.compile(r'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|dipper|sprinkler|character',re.I)
+          out.append('selected_mode='+mode)
           out.append('Version='+str(data.get('Version')))
           out.append('BuildId='+str(data.get('BuildId')))
           out.append('Arch='+str(data.get('Arch')))
@@ -64,8 +100,7 @@ jobs:
               blob=' '.join(str(v) for v in f.values()) if isinstance(f,dict) else str(f)
               if terms.search(blob): matched.append(f)
           out.append(f'RoutingMatchedFunctions={len(matched)}')
-          for f in matched:
-              out.append(json.dumps(f,sort_keys=True))
+          for f in matched: out.append(json.dumps(f,sort_keys=True))
           files=data.get('Files') or []
           fmatch=[x for x in files if terms.search(str(x))]
           out.append(f'\nRoutingMatchedFiles={len(fmatch)}')
@@ -76,16 +111,14 @@ jobs:
               blob=json.dumps(x,sort_keys=True) if isinstance(x,(dict,list)) else str(x)
               if terms.search(blob): smatch.append(x)
           out.append(f'\nRoutingMatchedStrings={len(smatch)}')
-          for x in smatch[:1500]:
-              out.append(json.dumps(x,sort_keys=True) if isinstance(x,(dict,list)) else str(x))
-          Path('routing-symbols/routing-summary.txt').write_text('\n'.join(out))
+          for x in smatch[:1500]: out.append(json.dumps(x,sort_keys=True) if isinstance(x,(dict,list)) else str(x))
+          (root/'routing-summary.txt').write_text('\n'.join(out))
           print('\n'.join(out[:500]))
 
       - name: Upload routing symbol evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: revolution-desktop-routing-goresym
-          path: |
-            routing-symbols/routing-summary.txt
-            routing-symbols/goresym.json
+          path: routing-symbols/
           if-no-files-found: error
