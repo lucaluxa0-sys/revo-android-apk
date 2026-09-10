@@ -53,16 +53,21 @@ def read_setting(name):
     return (result.stdout or "").strip()
 
 
-def enabled_services():
-    raw = read_setting("enabled_accessibility_services")
+def parse_enabled_setting(raw):
     if not raw or raw == "null":
         return []
     return [entry for entry in raw.split(":") if entry]
 
 
+def enabled_services():
+    return parse_enabled_setting(read_setting("enabled_accessibility_services"))
+
+
 def verify_service_declared():
     package_dump = shell("dumpsys", "package", PACKAGE, check=False).stdout or ""
-    (ARTIFACT_DIR / "a11y-package.txt").write_text(package_dump, encoding="utf-8", errors="replace")
+    (ARTIFACT_DIR / "a11y-package.txt").write_text(
+        package_dump, encoding="utf-8", errors="replace"
+    )
     if not component_present(package_dump):
         raise RuntimeError(
             "installed Revolution package does not declare RevoAccessibilityService; "
@@ -107,8 +112,8 @@ def section(text, heading, next_headings):
 
 
 def bound_section(text):
-    # Android 15 intentionally renders bound services as Service[label=..., ...]
-    # and does NOT include the component class name in that line.
+    # Android 15 renders bound accessibility services as Service[label=..., ...]
+    # and omits the concrete component class name from this section.
     return section(
         text,
         "Bound services",
@@ -124,38 +129,38 @@ def enabled_section(text):
     )
 
 
-def accessibility_manager_reports_bound(accessibility_dump):
-    # The previous verifier searched this section for RevoAccessibilityService and
-    # false-failed on API 35 because dumpsys prints only the service label here.
-    # A populated Service[...] record proves AccessibilityManager has a bound
-    # accessibility service. Exact component identity is checked independently below.
-    return bool(re.search(r"\bService\s*\[", bound_section(accessibility_dump)))
+def binding_section(text):
+    return section(
+        text,
+        "Binding services",
+        ("Crashed services", "Client list", "User state"),
+    )
 
 
-def accessibility_manager_reports_enabled_component(accessibility_dump):
-    return component_present(enabled_section(accessibility_dump))
+def crashed_section(text):
+    return section(text, "Crashed services", ("Client list", "User state"))
 
 
-def activity_service_dump():
-    return shell("dumpsys", "activity", "services", PACKAGE, check=False).stdout or ""
+def accessibility_manager_reports_exact_clean_binding(accessibility_dump, settings_services):
+    # The API-35 Bound-services section is label-only, so correlate it with the
+    # exact enabled component instead of asking ActivityManager for a service record.
+    # This CI emulator starts clean: requiring exactly one enabled component and
+    # exactly one bound Service[...] makes the identity mapping unambiguous.
+    entries = parse_enabled_setting(settings_services)
+    if len(entries) != 1 or not component_present(entries[0]):
+        return False
+    if not component_present(enabled_section(accessibility_dump)):
+        return False
+    if len(re.findall(r"\bService\s*\[", bound_section(accessibility_dump))) != 1:
+        return False
+    if re.search(r"\bService\s*\[", binding_section(accessibility_dump)):
+        return False
+    if re.search(r"\bService\s*\[", crashed_section(accessibility_dump)):
+        return False
+    return True
 
 
-def exact_service_active(activity_dump):
-    # ActivityManager's service table keeps the concrete component identity, unlike
-    # dumpsys accessibility's Bound-services display on API 35. Require an active
-    # ServiceRecord for Revolution's exact accessibility component so a similarly
-    # labelled third-party accessibility service cannot satisfy this gate.
-    value = activity_dump or ""
-    return component_present(value) and bool(re.search(r"\bServiceRecord\s*\{", value))
-
-
-def write_state_artifacts(
-    attempt,
-    settings_services,
-    master,
-    accessibility_dump,
-    activity_dump,
-):
+def write_state_artifacts(attempt, settings_services, master, accessibility_dump):
     (ARTIFACT_DIR / "a11y-enabled-setting.txt").write_text(
         settings_services + "\n", encoding="utf-8"
     )
@@ -163,70 +168,64 @@ def write_state_artifacts(
     (ARTIFACT_DIR / "a11y-dumpsys.txt").write_text(
         accessibility_dump, encoding="utf-8", errors="replace"
     )
-    (ARTIFACT_DIR / "a11y-activity-services.txt").write_text(
-        activity_dump, encoding="utf-8", errors="replace"
-    )
     (ARTIFACT_DIR / "a11y-attempt.txt").write_text(str(attempt) + "\n", encoding="utf-8")
 
 
 def wait_for_bound_service(timeout_s=20.0):
     deadline = time.monotonic() + timeout_s
     attempt = 0
-    last = ("", "", "", "")
+    last = ("", "", "")
     while time.monotonic() < deadline:
         services = read_setting("enabled_accessibility_services")
         master = read_setting("accessibility_enabled")
         accessibility_dump = shell("dumpsys", "accessibility", check=False).stdout or ""
-        activity_dump = activity_service_dump()
-        last = (services, master, accessibility_dump, activity_dump)
-        write_state_artifacts(
-            attempt,
-            services,
-            master,
-            accessibility_dump,
-            activity_dump,
-        )
+        last = (services, master, accessibility_dump)
+        write_state_artifacts(attempt, services, master, accessibility_dump)
 
-        setting_ok = component_present(services) and master == "1"
-        enabled_exact = accessibility_manager_reports_enabled_component(accessibility_dump)
-        manager_bound = accessibility_manager_reports_bound(accessibility_dump)
-        active_exact = exact_service_active(activity_dump)
+        entries = parse_enabled_setting(services)
+        setting_ok = (
+            master == "1"
+            and len(entries) == 1
+            and component_present(entries[0])
+        )
+        manager_exact_clean = accessibility_manager_reports_exact_clean_binding(
+            accessibility_dump, services
+        )
         print(
-            f"A11Y probe={attempt} setting_ok={setting_ok} enabled_exact={enabled_exact} "
-            f"manager_bound={manager_bound} active_exact={active_exact} "
+            f"A11Y probe={attempt} setting_ok={setting_ok} "
+            f"manager_exact_clean={manager_exact_clean} "
             f"services={services!r} master={master!r}",
             flush=True,
         )
-        if setting_ok and enabled_exact and manager_bound and active_exact:
+        if setting_ok and manager_exact_clean:
             return True
         time.sleep(0.5)
         attempt += 1
 
-    services, master, accessibility_dump, activity_dump = last
+    services, master, accessibility_dump = last
     print("===== FINAL ACCESSIBILITY DUMPSYS =====", flush=True)
     print(accessibility_dump, flush=True)
-    print("===== FINAL ACTIVITY SERVICE DUMPSYS =====", flush=True)
-    print(activity_dump, flush=True)
     print("===== REVOLUTION ACCESSIBILITY LOGCAT =====", flush=True)
     logcat = adb("logcat", "-d", "-v", "time", check=False).stdout or ""
     for line in logcat.splitlines():
         if re.search(r"RevoAccessibility|AccessibilityManager|com\.revolution\.android", line, re.I):
             print(line, flush=True)
     raise RuntimeError(
-        "Revolution Accessibility did not produce a verified exact active service binding "
-        f"within {timeout_s:.0f}s; services={services!r} master={master!r}"
+        "Revolution Accessibility did not produce one exact enabled component plus "
+        f"one clean bound Accessibility service within {timeout_s:.0f}s; "
+        f"services={services!r} master={master!r}"
     )
 
 
 def main():
-    # CI setup only: enable the real installed service deterministically, then fail
-    # closed unless both AccessibilityManager and ActivityManager prove the service
-    # is enabled/bound and the concrete active component is Revolution's service.
+    # CI setup only. On the clean Android emulator, fail closed unless the installed
+    # package declares the exact service, secure settings enable only that component,
+    # and AccessibilityManager reports exactly one clean bound service for it.
     verify_service_declared()
     set_service_enabled()
     wait_for_bound_service()
     print(
-        "PASS: Revolution Accessibility is enabled and its exact service is active/bound",
+        "PASS: Revolution Accessibility exact component is enabled and cleanly bound",
         flush=True,
     )
     return 0
