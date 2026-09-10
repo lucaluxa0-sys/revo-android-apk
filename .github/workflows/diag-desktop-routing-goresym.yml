@@ -1,0 +1,91 @@
+name: Recover desktop Revolution routing symbols with GoReSym
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-desktop-routing-goresym.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Download exact pinned Revolution desktop binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache routing-symbols
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Build GoReSym from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/mandiant/GoReSym.git /tmp/GoReSym
+          (cd /tmp/GoReSym && go build -o /tmp/goresym .)
+          /tmp/goresym -about | head -n 30
+
+      - name: Recover Go metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/goresym -t -p -strings .cache/RevolutionMacro.exe > routing-symbols/goresym.json
+          test -s routing-symbols/goresym.json
+
+      - name: Extract routing-specific functions files and strings
+        shell: python
+        run: |
+          import json, re
+          from pathlib import Path
+          p=Path('routing-symbols/goresym.json')
+          data=json.loads(p.read_text(errors='replace'))
+          terms=re.compile(r'hive|claim|field|route|routing|travel|walk|gather|spawn|join|convert|reset|cannon|path|move|dipper|sprinkler|character',re.I)
+          out=[]
+          out.append('Version='+str(data.get('Version')))
+          out.append('BuildId='+str(data.get('BuildId')))
+          out.append('Arch='+str(data.get('Arch')))
+          out.append('top_level_keys='+repr(sorted(data.keys())))
+          funcs=data.get('UserFunctions') or []
+          out.append(f'UserFunctions={len(funcs)}')
+          matched=[]
+          for f in funcs:
+              blob=' '.join(str(v) for v in f.values()) if isinstance(f,dict) else str(f)
+              if terms.search(blob): matched.append(f)
+          out.append(f'RoutingMatchedFunctions={len(matched)}')
+          for f in matched:
+              out.append(json.dumps(f,sort_keys=True))
+          files=data.get('Files') or []
+          fmatch=[x for x in files if terms.search(str(x))]
+          out.append(f'\nRoutingMatchedFiles={len(fmatch)}')
+          for x in fmatch: out.append(str(x))
+          strings=data.get('Strings') or []
+          smatch=[]
+          for x in strings:
+              blob=json.dumps(x,sort_keys=True) if isinstance(x,(dict,list)) else str(x)
+              if terms.search(blob): smatch.append(x)
+          out.append(f'\nRoutingMatchedStrings={len(smatch)}')
+          for x in smatch[:1500]:
+              out.append(json.dumps(x,sort_keys=True) if isinstance(x,(dict,list)) else str(x))
+          Path('routing-symbols/routing-summary.txt').write_text('\n'.join(out))
+          print('\n'.join(out[:500]))
+
+      - name: Upload routing symbol evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-desktop-routing-goresym
+          path: |
+            routing-symbols/routing-summary.txt
+            routing-symbols/goresym.json
+          if-no-files-found: error
