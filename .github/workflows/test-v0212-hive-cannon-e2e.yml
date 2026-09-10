@@ -7,7 +7,9 @@ on:
     paths:
       - '.github/workflows/test-v0212-hive-cannon-e2e.yml'
       - '.ci/enable_revo_accessibility.py'
+      - '.ci/verify_v0212_hive_cannon_e2e.py'
       - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-template-contrast.py'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/instrument-v0211-elol-e2e.py'
       - 'third_party/revolution-2025-gpl/macro/routines/hive/**'
@@ -46,12 +48,14 @@ jobs:
           unzip -q /tmp/source.zip
           python3 tools/patch-native-v0211-bee-swarm-launch.py
           python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-template-contrast.py
           python3 tools/instrument-v0211-elol-e2e.py
-          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/instrument-v0211-elol-e2e.py
+          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/patch-native-v0212-template-contrast.py tools/instrument-v0211-elol-e2e.py .ci/verify_v0212_hive_cannon_e2e.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'desktop GotoCannon: Forward 12' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'desktop GotoCannon: Right 37 slot' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'maskedBackgroundHasContrast' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'joystickWithDoubleTap' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           test -s revo-android/app/src/main/assets/revo-routing/claimhive.png
           test -s revo-android/app/src/main/assets/revo-routing/press_e.png
@@ -246,49 +250,7 @@ jobs:
             adb logcat -d -v time > emulator-artifacts/logcat.txt
             grep -E 'RevoElol|RevoWeb|RevoAndroid|RevoPreGatherRouter|RevoGatherAdapter|FakeRobloxHive' emulator-artifacts/logcat.txt > emulator-artifacts/route-flow.txt || true
             cat emulator-artifacts/route-flow.txt
-            python3 - <<'PY'
-            import json, re
-            from pathlib import Path
-            text=Path('emulator-artifacts/logcat.txt').read_text(errors='replace')
-            required=[
-              'FAKE_ROBLOX_URI=roblox://placeId=1537690962',
-              'FAKE_HIVE_PROMPT_VISIBLE',
-              'template=claimhive',
-              'desktop ClaimHive: Backward 2',
-              'desktop KeyPress(E): claim center hive',
-              'FAKE_CLAIM_TAP',
-              'Claimed Hive: 3',
-              'desktop GotoCannon: Forward 12',
-              'desktop GotoCannon: Right 37 slot 1',
-              'desktop GotoCannon: Right 37 slot 2',
-              'desktop GotoCannon: Right 37 slot 3',
-              'desktop GotoCannon: hold Right + Space, 1300ms, Space',
-              'template=press_e',
-              'state=READY_AT_CANNON',
-            ]
-            missing=[x for x in required if x not in text]
-            if missing:
-              raise SystemExit('missing runtime evidence: '+repr(missing))
-            states=[]
-            for line in text.splitlines():
-              if 'RevoElolState' not in line: continue
-              m=re.search(r'RevoElolState(?:\([^)]*\))?:\s*(\{.*\})\s*$', line)
-              if m:
-                try: states.append(json.loads(m.group(1)))
-                except Exception: pass
-            if not states:
-              raise SystemExit('no parseable RevoElolState JSON')
-            s=states[-1]
-            r=s.get('routing') or {}
-            assert s.get('running') is True, s
-            assert r.get('state')=='READY_AT_CANNON', r
-            assert r.get('claimedHive')==3, r
-            assert r.get('cannonSlotMoves')==3, r
-            assert r.get('fieldRoutingPorted') is False, r
-            assert r.get('lastGestureAccepted') is True, r
-            assert (s.get('actionCount') or 0)==0, s  # Gather remains blocked until field routing exists.
-            print('PASS: real Start -> Bee Swarm URI -> source-grounded ClaimHive -> GotoCannon reached READY_AT_CANNON')
-            PY
+            python3 .ci/verify_v0212_hive_cannon_e2e.py
 
       - name: Upload hive routing end-to-end evidence
         if: always()
