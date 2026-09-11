@@ -15,8 +15,21 @@ on:
       - 'tools/patch-native-v0212-joystick-callback-thread.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
+      - 'tools/patch-revo-frontend-v028.py'
+      - 'tools/recover-vite-pngs.js'
+      - 'revo-android/extract_revo_frontend.py'
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
+      - 'patches/android-backend-v0.2.6.js'
+      - 'patches/android-backend-v0.2.8.js'
+      - 'patches/android-backend-v0.2.8.1.js'
+      - 'patches/android-backend-v0.2.8.2.js'
       - 'patches/android-backend-v0.2.9.js'
       - 'patches/android-backend-v0.2.10.js'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
 
 permissions:
   contents: read
@@ -101,12 +114,18 @@ jobs:
               patches/android-backend-v0.2.9.js \
               patches/android-backend-v0.2.10.js \
               > revo-android/app/src/main/assets/www/android-wails-shim.js
-          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
-          grep -q "'e_lol'" revo-android/app/src/main/assets/www/android-wails-shim.js
-          grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);" revo-android/app/src/main/assets/www/android-wails-shim.js
-          grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')" revo-android/app/src/main/assets/www/android-wails-shim.js
-          ! grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)" revo-android/app/src/main/assets/www/android-wails-shim.js
-          ! grep -q "localStorage.setItem('revo.android.msPerStud','12')" revo-android/app/src/main/assets/www/android-wails-shim.js
+          SHIM=revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check "$SHIM"
+          grep -q "'e_lol'" "$SHIM"
+          grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);" "$SHIM"
+          grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')" "$SHIM"
+          grep -Fq "joystickCenterX: localNumber('revo.android.joystickCenterX', 0.09583333333333334)" "$SHIM"
+          grep -Fq "joystickCenterY: localNumber('revo.android.joystickCenterY', 0.8657407407407407)" "$SHIM"
+          grep -Fq "joystickRadius: localNumber('revo.android.joystickRadius', 0.08333333333333333)" "$SHIM"
+          grep -Fq "jumpX: localNumber('revo.android.jumpX', 0.90375)" "$SHIM"
+          grep -Fq "jumpY: localNumber('revo.android.jumpY', 0.8648148148148148)" "$SHIM"
+          ! grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)" "$SHIM"
+          ! grep -q "localStorage.setItem('revo.android.msPerStud','12')" "$SHIM"
 
       - name: Install Revolution icon and stamp preview version
         shell: bash
@@ -142,24 +161,32 @@ jobs:
           test -s "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "versionName='0.2.12-phone-preview'" /tmp/badging.txt
-          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "'e_lol'"
-          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);"
-          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')"
-          ! unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)"
+          unzip -p "$APK" assets/www/android-wails-shim.js > /tmp/apk-android-wails-shim.js
+          grep -q "'e_lol'" /tmp/apk-android-wails-shim.js
+          grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);" /tmp/apk-android-wails-shim.js
+          grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')" /tmp/apk-android-wails-shim.js
+          grep -Fq "joystickCenterX: localNumber('revo.android.joystickCenterX', 0.09583333333333334)" /tmp/apk-android-wails-shim.js
+          grep -Fq "joystickCenterY: localNumber('revo.android.joystickCenterY', 0.8657407407407407)" /tmp/apk-android-wails-shim.js
+          grep -Fq "joystickRadius: localNumber('revo.android.joystickRadius', 0.08333333333333333)" /tmp/apk-android-wails-shim.js
+          grep -Fq "jumpX: localNumber('revo.android.jumpX', 0.90375)" /tmp/apk-android-wails-shim.js
+          grep -Fq "jumpY: localNumber('revo.android.jumpY', 0.8648148148148148)" /tmp/apk-android-wails-shim.js
+          ! grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)" /tmp/apk-android-wails-shim.js
           SHORT_SHA="${GITHUB_SHA:0:7}"
           OUT=phone-preview-output
           mkdir -p "$OUT"
           NAME="$OUT/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-${SHORT_SHA}.apk"
           cp "$APK" "$NAME"
           sha256sum "$NAME" | tee "$OUT/SHA256SUMS-v0212-phone-preview.txt"
-          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\nscreen_physics_gate_run=%s\nscreen_physics_gate_commit=%s\nscreen_physics_attempts=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_model=%s\nandroid_serializer=%s\nstatus=%s\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_SHA" '34607773001' '573edf135d7a961d40314a51fbc9f1c4fbbdfdb4' \
-            '34607773039' '573edf135d7a961d40314a51fbc9f1c4fbbdfdb4' '2/2 strict API35 screen-physics attempts passed unchanged verifier' \
+          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\nfunctional_gate_result=%s\nscreen_physics_gate_run=%s\nscreen_physics_gate_commit=%s\nscreen_physics_result=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_model=%s\nproduction_mobile_controls=%s\nandroid_serializer=%s\nstatus=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" \
+            '34624466317' 'b2b25c31be5cd86181e70c230ff5c0648dd17150' 'unchanged retry passed full Android 15 Start -> Hive -> Cannon -> Pine -> real e_lol verifier' \
+            '34636250700' 'c97cf6251fc12642f6a15d071a5c6f4fd0074456' 'fresh strict API35 screen-physics passed unchanged verifier; artifact sha256:760e44189594494237979bb67dc6e8a910454e8d9f12093af6f12b8bbc773b46' \
             'nosyliam/revolution-macro v0.9c-hotfix3' \
             '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb' \
             'active-preset MoveSpeed -> recovered desktop effective-speed duration; explicit msPerStud override only' \
+            'Samsung landscape defaults: joystick=(0.09583333333333334,0.8657407407407407) radius=0.08333333333333333 jump=(0.90375,0.8648148148148148); localStorage override precedence retained' \
             '35ms acquire + prequeued continued full-deflection segment; serialized jump taps at recovered offsets' \
-            'PHONE PREVIEW ONLY - full API35 macro E2E + repeated strict screen-physics green; physical Samsung/BSS world-displacement and mobile buff-recognition validation pending' \
+            'PHONE PREVIEW ONLY - physical Samsung joystick geometry measured and controlled real-BSS joystick swipe moved the character; full real-device hive/route/gather displacement and mobile buff-recognition validation remain pending' \
             > "$OUT/BUILD_PROVENANCE-v0212-phone-preview.txt"
 
       - name: Upload phone preview APK
