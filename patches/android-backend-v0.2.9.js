@@ -69,9 +69,13 @@
       // A positive value is an explicit CI/physical-calibration override only.
       // Production leaves this at zero and uses desktop-effective-speed timing.
       msPerStud: localPositiveNumber('revo.android.msPerStud'),
-      joystickCenterX: localNumber('revo.android.joystickCenterX', 0.16),
-      joystickCenterY: localNumber('revo.android.joystickCenterY', 0.78),
-      joystickRadius: localNumber('revo.android.joystickRadius', 0.085),
+      // Real Roblox Mobile gameplay is landscape. These normalized defaults come from
+      // the physical Samsung 2400x1080 joystick/jump controls; CI can override them.
+      joystickCenterX: localNumber('revo.android.joystickCenterX', 0.09583333333333334),
+      joystickCenterY: localNumber('revo.android.joystickCenterY', 0.8657407407407407),
+      joystickRadius: localNumber('revo.android.joystickRadius', 0.08333333333333333),
+      jumpX: localNumber('revo.android.jumpX', 0.90375),
+      jumpY: localNumber('revo.android.jumpY', 0.8648148148148148),
       requireRobloxForeground: true
     };
   }
