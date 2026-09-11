@@ -79,7 +79,6 @@ jobs:
               try: return raw[o:z].decode('utf-8')
               except Exception: return None
 
-          # Recover the exact Go function table using the already-proven hotfix3 anchor.
           minpc = 0x1400014a0
           best = None
           p = 0
@@ -148,13 +147,10 @@ jobs:
               'BrownBear': [b'brown_bear', b'BrownBear'],
               'ScienceBear': [b'science_bear', b'ScienceBear'],
               'GummyBear': [b'gummy_bear', b'GummyBear'],
-              'Oil': [b'"oil"', b'Oil],
+              'Oil': [b'oil', b'Oil'],
               'SuperSmoothie': [b'smoothie', b'SuperSmoothie'],
           }
 
-          # Locate raw string starts plus any static Go string headers {ptr,len}
-          # that point at those starts. Header xrefs matter when code does not LEA
-          # the literal bytes directly.
           targets_by_label={}
           loc_lines=[]
           for label, variants in needles.items():
@@ -168,7 +164,6 @@ jobs:
                       if v is not None:
                           raw_starts.append((needle,o,v))
                       p=o+1
-              # De-duplicate while preserving exact needle evidence.
               seen=set(); starts=[]
               for item in raw_starts:
                   key=(item[1],item[2])
@@ -185,8 +180,6 @@ jobs:
                       hva=off2va(h)
                       if hva is not None and h+16 <= len(raw):
                           ln=q(h+8)
-                          # Accept plausible string-header lengths that at least
-                          # cover this matched spelling, but keep them bounded.
                           if len(needle) <= ln <= 80:
                               headers.append((h,hva,ln,v))
                               target_vas.add(hva)
