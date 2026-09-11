@@ -62,6 +62,7 @@ method = r'''
                 "c.Set('driftComp',true);c.Set('position','center');c.Set('yaw',0);c.Set('pitch',0);" +
                 "localStorage.setItem('revo.android.msPerStud','12');localStorage.setItem('revo.android.joystickCenterX','0.16');" +
                 "localStorage.setItem('revo.android.joystickCenterY','0.78');localStorage.setItem('revo.android.joystickRadius','0.085');" +
+                "localStorage.setItem('revo.android.jumpX','0.88');localStorage.setItem('revo.android.jumpY','0.78');" +
                 "const cfg=window.RevoAndroidDebug&&window.RevoAndroidDebug.engineConfig?window.RevoAndroidDebug.engineConfig('Default'):null;" +
                 "console.error('RevoElolPrepared '+JSON.stringify(cfg));" +
                 "const buttons=[...document.querySelectorAll('button')];" +
