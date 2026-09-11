@@ -1,0 +1,201 @@
+name: Prove modern v0.9c MoveSpeed formula
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-movespeed-formula.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache movespeed-formula-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Install binary parsers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Assert exact MoveSpeed recompute and Walk timing semantics
+        shell: python
+        run: |
+          from pathlib import Path
+          import math, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_IMM
+
+          EXE = Path('.cache/RevolutionMacro.exe')
+          PINNED_SHA = '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb'
+
+          # Exact v0.9c-hotfix3 addresses, valid only because the release SHA above
+          # is pinned and checked before this verifier runs.
+          HASTE_CLAMP = (0x140c1b760, 0x140c1b840)
+          MOVE_SPEED = (0x140c1c820, 0x140c1c840)
+          RECOMPUTE = (0x140c1c840, 0x140c1ccc0)
+          TICK = (0x140c1f220, 0x140c208e0)
+          WALK = (0x140c61480, 0x140c61620)
+
+          raw = EXE.read_bytes()
+          pe = pefile.PE(str(EXE), fast_load=False)
+          base = int(pe.OPTIONAL_HEADER.ImageBase)
+          sections = [
+              dict(raw=int(s.PointerToRawData), size=int(s.SizeOfRawData), rva=int(s.VirtualAddress))
+              for s in pe.sections
+          ]
+
+          def va2off(va):
+              rva = va - base
+              if 0 <= rva < int(pe.OPTIONAL_HEADER.SizeOfHeaders):
+                  return rva
+              for s in sections:
+                  if s['rva'] <= rva < s['rva'] + s['size']:
+                      return s['raw'] + rva - s['rva']
+              raise SystemExit(f'unmapped VA {va:#x}')
+
+          def f64(va):
+              return struct.unpack_from('<d', raw, va2off(va))[0]
+
+          md = Cs(CS_ARCH_X86, CS_MODE_64)
+          md.detail = True
+
+          def disasm(lo, hi):
+              return {ins.address: ins for ins in md.disasm(raw[va2off(lo):va2off(hi)], lo)}
+
+          ins = {}
+          for lo, hi in (HASTE_CLAMP, MOVE_SPEED, RECOMPUTE, TICK, WALK):
+              ins.update(disasm(lo, hi))
+
+          def need(addr, mnemonic=None, contains=None):
+              x = ins.get(addr)
+              if x is None:
+                  raise SystemExit(f'missing instruction at {addr:#x}')
+              if mnemonic is not None and x.mnemonic != mnemonic:
+                  raise SystemExit(f'{addr:#x}: mnemonic drift {x.mnemonic!r} != {mnemonic!r}')
+              if contains is not None and contains not in x.op_str:
+                  raise SystemExit(f'{addr:#x}: operand drift {x.op_str!r}; expected substring {contains!r}')
+              return x
+
+          def call_target(addr):
+              x = need(addr, 'call')
+              if not x.operands or x.operands[0].type != X86_OP_IMM:
+                  raise SystemExit(f'{addr:#x}: expected direct call, got {x.op_str!r}')
+              return int(x.operands[0].imm)
+
+          def need_const(va, expected):
+              got = f64(va)
+              if not math.isclose(got, expected, rel_tol=0.0, abs_tol=1e-12):
+                  raise SystemExit(f'constant drift at {va:#x}: {got!r} != {expected!r}')
+              return got
+
+          out = [
+              f'PINNED_SHA256={PINNED_SHA}',
+              '',
+              '===== MoveSpeed accessor =====',
+          ]
+
+          need(0x140c1c820, 'movsd', '[rax + 0xa8]')
+          need(0x140c1c828, 'ret')
+          out.append('PROVED MoveSpeed() returns cached float64 receiver+0xa8')
+
+          out += ['', '===== Base speed source =====']
+          need(0x140c1c900, 'movsd', '[rdx]')
+          out.append('PROVED recompute begins from configured PlayerSettings.MoveSpeed value')
+
+          out += ['', '===== Bear-family +4 branch =====']
+          expected_bear_ids = [3, 7, 10, 4, 5, 6, 9]
+          bear_addrs = [0x140c1ca85, 0x140c1ca91, 0x140c1ca9d, 0x140c1caa9, 0x140c1cab5, 0x140c1cac1, 0x140c1cacd]
+          for addr, value in zip(bear_addrs, expected_bear_ids):
+              need(addr, 'mov', hex(value) if value >= 10 else str(value))
+          need(0x140c1cc8a, 'movsd')
+          need_const(0x1425cd9d8, 4.0)
+          need(0x140c1cc92, 'addsd', 'xmm0, xmm1')
+          out.append('PROVED any active key in {3,4,5,6,7,9,10} adds exactly +4 once')
+
+          out += ['', '===== Coconut Haste +10 branch =====']
+          need(0x140c1cb37, 'mov', 'ecx, 2')
+          if call_target(0x140c1cb40) != 0x14000cba0:
+              raise SystemExit('mapaccess2_fast64 target drift for key 2 lookup')
+          need_const(0x1425cda38, 10.0)
+          need(0x140c1cb57, 'addsd', 'xmm0, xmm1')
+          out.append('PROVED active key 2 adds exactly +10')
+
+          out += ['', '===== Haste and Haste+ branches =====']
+          need(0x140c1cbef, 'test', 'rcx, rcx')
+          need(0x140c1cbf4, 'cmp', 'rcx, 1')
+          need(0x140c1cbfa, 'addsd', 'xmm0, xmm0')
+          need(0x140c1cc0e, 'call')
+          if call_target(0x140c1cc0e) != 0x140c1b760:
+              raise SystemExit('Haste stack clamp helper target drift')
+          need(0x140c1b772, 'cmp', 'rax, 0xa')
+          need(0x140c1b80b, 'mov', 'eax, 0xa')
+          need_const(0x1425cd918, 0.1)
+          need_const(0x1425cd8c8, 1.0)
+          need(0x140c1cc23, 'mulsd', 'xmm0, xmm1')
+          need(0x140c1cc2f, 'addsd', 'xmm0, xmm1')
+          need(0x140c1cc39, 'mulsd', 'xmm0, xmm1')
+          out.append('PROVED key 0 multiplier = 1 + 0.1 * min(stack, 10)')
+          out.append('PROVED key 1 multiplier = 2.0')
+
+          out += ['', '===== Oil / Super Smoothie multipliers =====']
+          need(0x140c1cc45, 'cmp', 'rcx, 0xb')
+          need_const(0x1425cd9d0, 1.2)
+          need(0x140c1cc53, 'mulsd', 'xmm0, xmm1')
+          need(0x140c1cc60, 'cmp', 'rcx, 0xc')
+          need_const(0x1425cdbe0, 1.25)
+          need(0x140c1cc72, 'mulsd', 'xmm0, xmm1')
+          out.append('PROVED key 11 multiplier = 1.2')
+          out.append('PROVED key 12 multiplier = 1.25')
+
+          out += ['', '===== Tick cache update =====']
+          if call_target(0x140c201ed) != 0x140c1c840:
+              raise SystemExit('Tick recompute call target drift')
+          need(0x140c201fa, 'movsd', '[rcx + 0xa8]')
+          out.append('PROVED Tick stores recomputed effective speed into receiver+0xa8')
+
+          out += ['', '===== Walk duration formula =====']
+          need(0x140c6158b, 'movsd', 'xmm1')
+          need(0x140c61591, 'divsd', 'xmm1, xmm0')
+          need_const(0x1425cd938, 1_000_000_000.0)
+          need(0x140c6159d, 'mulsd', 'xmm1, xmm0')
+          need(0x140c615a1, 'cvttsd2si', 'rcx, xmm1')
+          out.append('PROVED desktop duration_ns = distance / effectiveSpeed * 1,000,000,000')
+
+          out += [
+              '',
+              '===== Recovered modern v0.9c effective-speed semantics =====',
+              'speed = configuredMoveSpeed',
+              'if any bear-family key in {3,4,5,6,7,9,10}: speed += 4',
+              'if key 2 active: speed += 10',
+              'if key 0 active: speed *= 1 + 0.1 * min(stack, 10)',
+              'if key 1 active: speed *= 2',
+              'if key 11 active: speed *= 1.2',
+              'if key 12 active: speed *= 1.25',
+              'desktopWalkDurationSeconds = distance / speed',
+              '',
+              'NOTE: This proves desktop semantics only. It does NOT assume Android touch movement travels the same studs per second.',
+          ]
+
+          text = '\n'.join(out)
+          Path('movespeed-formula-evidence/summary.txt').write_text(text, encoding='utf-8')
+          print(text)
+
+      - name: Upload MoveSpeed formula evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-movespeed-formula
+          path: movespeed-formula-evidence/
+          if-no-files-found: error
