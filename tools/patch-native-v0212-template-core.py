@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 from pathlib import Path
 
 ROUTER = Path('revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java')
@@ -193,6 +194,35 @@ new_foreground = r'''    private static boolean isRobloxPackageName(String pkg) 
 if svc.count(old_foreground) != 1:
     raise SystemExit('Accessibility foreground anchor missing or duplicated')
 svc = svc.replace(old_foreground, new_foreground, 1)
+
+# A fixed-orientation Roblox launch can briefly leave getRootInActiveWindow() and
+# AccessibilityWindowInfo roots empty while WindowManager rotates the display. Preserve
+# strict foreground evidence across that churn by caching only real foreground/focus
+# Accessibility events. The cache is replaced by the next app's foreground event, so
+# this never treats an arbitrary installed/background Roblox process as foreground.
+event_pattern = re.compile(
+    r'public\s+void\s+onAccessibilityEvent\s*\(\s*(?:final\s+)?(?:android\.view\.accessibility\.)?AccessibilityEvent\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\{'
+)
+event_matches = list(event_pattern.finditer(svc))
+if len(event_matches) != 1:
+    raise SystemExit(f'Accessibility event hook anchor expected exactly once, found {len(event_matches)}')
+event_match = event_matches[0]
+event_var = event_match.group(1)
+event_hook = f'''
+        // foreground-event-cache-v1: survives temporary empty roots during rotation.
+        try {{
+            if ({event_var} != null && {event_var}.getPackageName() != null) {{
+                int foregroundEventType = {event_var}.getEventType();
+                if (foregroundEventType == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                        || foregroundEventType == android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED) {{
+                    String foregroundEventPackage = String.valueOf({event_var}.getPackageName());
+                    if (!foregroundEventPackage.isEmpty()) activePackageName = foregroundEventPackage;
+                }}
+            }}
+        }} catch (Throwable ignored) {{}}
+'''
+insert_at = event_match.end()
+svc = svc[:insert_at] + event_hook + svc[insert_at:]
 SERVICE.write_text(svc, encoding='utf-8')
 
 macro = MACRO.read_text(encoding='utf-8')
@@ -203,9 +233,9 @@ if macro.count(old_status) != 1:
 macro = macro.replace(old_status, new_status, 1)
 MACRO.write_text(macro, encoding='utf-8')
 
-if 'getWindows()' not in svc or 'isRobloxPackageName' not in svc:
+if 'getWindows()' not in svc or 'isRobloxPackageName' not in svc or 'foreground-event-cache-v1' not in svc:
     raise SystemExit('Accessibility real-phone foreground fallback was not installed')
 if 'pkg=%s • route=%s' not in macro:
     raise SystemExit('visible real-phone routing diagnostics were not installed')
 
-print('Patched v0.2.12 template matcher plus real-phone foreground/router diagnostics')
+print('Patched v0.2.12 template matcher plus rotation-safe real-phone foreground/router diagnostics')
