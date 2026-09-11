@@ -1,0 +1,48 @@
+name: Publish exact v0.2.12 phone preview artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/publish-v0212-phone-preview-existing-artifact.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-existing-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download exact green phone-preview artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-bfc270a
+          path: /tmp/v0212-preview
+          repository: lucaluxa0-sys/revo-android-apk
+          run-id: 34579330668
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact bytes and publish uniquely named preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME='RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-bfc270a.apk'
+          EXPECTED='ee095cf5dfc30a047a2a5df6e465c0af079be522248b0735d16d114d305ba011'
+          SRC="/tmp/v0212-preview/$NAME"
+          test -s "$SRC"
+          echo "$EXPECTED  $SRC" | sha256sum -c -
+          test ! -e "$NAME"
+          cp "$SRC" "$NAME"
+          sha256sum "$NAME"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$NAME"
+          git commit -m 'Publish v0.2.12 phone preview APK [skip ci]'
+          git push origin HEAD:main
