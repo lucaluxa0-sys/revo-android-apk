@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# Diagnostic-only source export. Touching this comment triggers a fresh archive rebuild.
 jobs:
   export:
     runs-on: ubuntu-latest
