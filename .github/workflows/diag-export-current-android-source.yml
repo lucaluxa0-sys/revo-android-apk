@@ -47,6 +47,87 @@ jobs:
         run: |
           set -euo pipefail
           find revo-android/app/src/main -type f -print | sort | tee /tmp/android-source-files.txt
+      - name: Audit exact production joystick gesture implementation
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          service_path = Path('revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java')
+          router_path = Path('revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java')
+          service = service_path.read_text(encoding='utf-8')
+          router = router_path.read_text(encoding='utf-8')
+
+          def extract_method(text, name):
+              match = re.search(r'(?m)^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:synchronized\s+)?[\w<>\[\]]+\s+' + re.escape(name) + r'\s*\(', text)
+              if not match:
+                  return None
+              start = match.start()
+              brace = text.find('{', match.end())
+              if brace < 0:
+                  return None
+              depth = 0
+              in_string = False
+              escape = False
+              quote = ''
+              for i in range(brace, len(text)):
+                  ch = text[i]
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif ch == '\\':
+                          escape = True
+                      elif ch == quote:
+                          in_string = False
+                      continue
+                  if ch in ('\"', "'"):
+                      in_string = True
+                      quote = ch
+                  elif ch == '{':
+                      depth += 1
+                  elif ch == '}':
+                      depth -= 1
+                      if depth == 0:
+                          return text[start:i + 1]
+              return None
+
+          names = [
+              'joystick',
+              'joystickWithDoubleTap',
+              'queueConcurrentJoystick',
+              'safeHold',
+              'touch',
+          ]
+          sections = []
+          found = {}
+          for name in names:
+              method = extract_method(service, name)
+              found[name] = method
+              sections.append(f'===== RevoAccessibilityService.{name} =====\n' + (method or '<NOT FOUND>'))
+
+          move_method = extract_method(router, 'move')
+          move_field_method = extract_method(router, 'moveField')
+          sections.append('===== RevoPreGatherRouter.move =====\n' + (move_method or '<NOT FOUND>'))
+          sections.append('===== RevoPreGatherRouter.moveField =====\n' + (move_field_method or '<NOT FOUND>'))
+
+          joystick = found['joystick']
+          if not joystick:
+              raise SystemExit('production RevoAccessibilityService.joystick method not found')
+          if 'StrokeDescription' not in joystick or 'dispatchGesture' not in joystick:
+              raise SystemExit('joystick no longer uses Accessibility GestureDescription/StrokeDescription')
+
+          path_line = re.search(r'(?m)^.*(?:lineTo|moveTo).*$', joystick)
+          duration_lines = [line.strip() for line in joystick.splitlines() if 'duration' in line.lower() or 'hold' in line.lower()]
+          summary = [
+              'PRODUCTION_JOYSTICK_FOUND=1',
+              'USES_STROKE_DESCRIPTION=1',
+              f'FIRST_PATH_OPERATION={path_line.group(0).strip() if path_line else "<none>"}',
+              'DURATION_LINES=' + ' || '.join(duration_lines),
+              '',
+          ]
+          output = '\n'.join(summary + sections) + '\n'
+          Path('/tmp/joystick-audit.txt').write_text(output, encoding='utf-8')
+          print(output)
       - name: Upload exact post-patch Android source
         uses: actions/upload-artifact@v4
         with:
@@ -54,4 +135,5 @@ jobs:
           path: |
             revo-android/
             /tmp/android-source-files.txt
+            /tmp/joystick-audit.txt
           if-no-files-found: error
