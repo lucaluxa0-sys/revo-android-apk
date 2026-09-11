@@ -30,6 +30,7 @@ jobs:
           curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+          go version -m .cache/RevolutionMacro.exe > type-evidence/go-version-m.txt 2>&1 || true
 
       - name: Build exact pinned GoReSym
         shell: bash
@@ -41,22 +42,97 @@ jobs:
           (cd .cache/GoReSym && go build -trimpath -o ../goresym .)
           .cache/goresym -about > type-evidence/goresym-about.txt
 
-      - name: Recover modern types and interfaces
+      - name: Recover base metadata and preserve type-parser failures
         shell: bash
         run: |
-          set -euo pipefail
-          .cache/goresym -t -d -p .cache/RevolutionMacro.exe > type-evidence/goresym.json
-          .cache/goresym -t -d -p -human .cache/RevolutionMacro.exe > type-evidence/goresym-human.txt
-          python3 - <<'PY'
+          set -u
+          set +e
+          .cache/goresym -d -p .cache/RevolutionMacro.exe \
+            > type-evidence/goresym-base.json \
+            2> type-evidence/goresym-base.stderr.txt
+          BASE_RC=$?
+
+          VERSION=''
+          if [ "$BASE_RC" -eq 0 ]; then
+            VERSION="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              obj=json.loads(Path('type-evidence/goresym-base.json').read_text(encoding='utf-8'))
+              print(obj.get('Version') or '')
+          except Exception:
+              print('')
+          PY
+          )"
+          fi
+
+          .cache/goresym -t -d -p .cache/RevolutionMacro.exe \
+            > type-evidence/goresym-types-auto.json \
+            2> type-evidence/goresym-types-auto.stderr.txt
+          AUTO_RC=$?
+
+          EXPLICIT_RC=99
+          if [ "$AUTO_RC" -ne 0 ] && [ -n "$VERSION" ]; then
+            .cache/goresym -t -d -p -v "$VERSION" .cache/RevolutionMacro.exe \
+              > type-evidence/goresym-types-explicit.json \
+              2> type-evidence/goresym-types-explicit.stderr.txt
+            EXPLICIT_RC=$?
+          fi
+
+          HUMAN_RC=99
+          if [ "$AUTO_RC" -eq 0 ]; then
+            .cache/goresym -t -d -p -human .cache/RevolutionMacro.exe \
+              > type-evidence/goresym-human.txt \
+              2> type-evidence/goresym-human.stderr.txt
+            HUMAN_RC=$?
+            cp type-evidence/goresym-types-auto.json type-evidence/goresym.json
+          elif [ "$EXPLICIT_RC" -eq 0 ]; then
+            .cache/goresym -t -d -p -human -v "$VERSION" .cache/RevolutionMacro.exe \
+              > type-evidence/goresym-human.txt \
+              2> type-evidence/goresym-human.stderr.txt
+            HUMAN_RC=$?
+            cp type-evidence/goresym-types-explicit.json type-evidence/goresym.json
+          fi
+
+          {
+            echo "BASE_RC=$BASE_RC"
+            echo "DETECTED_VERSION=$VERSION"
+            echo "AUTO_TYPE_RC=$AUTO_RC"
+            echo "EXPLICIT_TYPE_RC=$EXPLICIT_RC"
+            echo "HUMAN_RC=$HUMAN_RC"
+          } | tee type-evidence/recovery-status.txt
+
+          # This is an evidence-collection step. The dedicated assertion below
+          # remains responsible for failing the diagnostic if type recovery did
+          # not actually succeed, after the raw failure evidence is uploaded.
+          exit 0
+
+      - name: Summarize recovered modern types and interfaces
+        shell: python
+        run: |
           from pathlib import Path
           import json, re
 
           jp = Path('type-evidence/goresym.json')
           hp = Path('type-evidence/goresym-human.txt')
+          out = []
+          if not jp.exists() or not hp.exists():
+              out.append('TYPE_RECOVERY_AVAILABLE=false')
+              for name in [
+                  'go-version-m.txt', 'recovery-status.txt',
+                  'goresym-base.stderr.txt', 'goresym-types-auto.stderr.txt',
+                  'goresym-types-explicit.stderr.txt', 'goresym-human.stderr.txt']:
+                  p=Path('type-evidence')/name
+                  if p.exists():
+                      out.append(f'===== {name} =====')
+                      out.append(p.read_text(encoding='utf-8', errors='replace'))
+              Path('type-evidence/relevant.txt').write_text('\n'.join(out),encoding='utf-8')
+              print('\n'.join(out))
+              raise SystemExit(0)
+
           obj = json.loads(jp.read_text(encoding='utf-8'))
           human = hp.read_text(encoding='utf-8', errors='replace').splitlines()
-
-          out = []
+          out.append('TYPE_RECOVERY_AVAILABLE=true')
           out.append('Version=' + str(obj.get('Version')))
           out.append('Arch=' + str(obj.get('Arch')))
           mm = obj.get('ModuleMeta') or {}
@@ -65,35 +141,30 @@ jobs:
           out.append('InterfacesCount=' + str(len(obj.get('Interfaces') or [])))
           out.append('')
 
-          needles = re.compile(r'(?i)(github\.com/nosyliam/revolution/pkg/common.*Macro|WatchMovement|MoveSpeed|UpdateSpeed|movement|buff|speed|InputManager|WalkAlign|WalkAsync|\.Walk\b)')
+          needles = re.compile(r'(?i)(github\.com/nosyliam/revolution/pkg/common.*Macro|WatchMovement|StopMovement|MoveSpeed|UpdateSpeed|movement|buff|speed|InputManager|WalkAlign|WalkAsync|\.Walk\b)')
           hits = [i for i,line in enumerate(human) if needles.search(line)]
-          emitted = set()
+          covered=[]
           out.append('===== RELEVANT HUMAN TYPE CONTEXT =====')
           for i in hits:
-              lo=max(0,i-8); hi=min(len(human),i+18)
-              key=(lo,hi)
-              if any(a<=i<b for a,b in emitted):
+              if any(lo <= i < hi for lo,hi in covered):
                   continue
-              emitted.add(key)
+              lo=max(0,i-10); hi=min(len(human),i+24)
+              covered.append((lo,hi))
               out.append(f'--- lines {lo+1}-{hi} ---')
               out.extend(human[lo:hi])
 
-          # Recursive JSON search keeps full evidence while surfacing any type or
-          # interface objects whose own serialized form mentions movement concepts.
           relevant=[]
           def walk(x,path='$'):
               if isinstance(x,dict):
                   blob=json.dumps(x,sort_keys=True,ensure_ascii=False)
-                  if len(blob) < 120000 and needles.search(blob):
+                  if len(blob) < 160000 and needles.search(blob):
                       relevant.append((path,x))
-                  for k,v in x.items():
-                      walk(v,path+'.'+str(k))
+                  for k,v in x.items(): walk(v,path+'.'+str(k))
               elif isinstance(x,list):
-                  for idx,v in enumerate(x):
-                      walk(v,f'{path}[{idx}]')
+                  for idx,v in enumerate(x): walk(v,f'{path}[{idx}]')
           for root_key in ('Types','Interfaces'):
-              if root_key in obj:
-                  walk(obj[root_key],'$.'+root_key)
+              if root_key in obj: walk(obj[root_key],'$.'+root_key)
+
           out.append('')
           out.append('===== RELEVANT JSON OBJECTS =====')
           seen=set()
@@ -106,19 +177,20 @@ jobs:
               out.append(blob)
 
           Path('type-evidence/relevant.txt').write_text('\n'.join(out),encoding='utf-8')
-          print('\n'.join(out[:2500]))
-          PY
-
-      - name: Assert useful type recovery
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q 'github.com/nosyliam/revolution/pkg/common' type-evidence/goresym-human.txt
-          grep -Eq 'Macro|WatchMovement' type-evidence/relevant.txt
+          print('\n'.join(out[:3000]))
 
       - name: Upload type evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: revolution-v09c-go-type-metadata
           path: type-evidence/
           if-no-files-found: error
+
+      - name: Assert useful type recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^TYPE_RECOVERY_AVAILABLE=true$' type-evidence/relevant.txt
+          grep -q 'github.com/nosyliam/revolution/pkg/common' type-evidence/goresym-human.txt
+          grep -Eq 'Macro|WatchMovement|StopMovement' type-evidence/relevant.txt
