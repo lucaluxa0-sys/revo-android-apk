@@ -1,0 +1,124 @@
+name: Recover v0.9c Go type metadata
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-go-type-metadata.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache type-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Build exact pinned GoReSym
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/mandiant/GoReSym.git .cache/GoReSym
+          git -C .cache/GoReSym checkout --detach 6fba10d77df98335cbd1fb7839043d1ffde8defb
+          test "$(git -C .cache/GoReSym rev-parse HEAD)" = '6fba10d77df98335cbd1fb7839043d1ffde8defb'
+          (cd .cache/GoReSym && go build -trimpath -o ../goresym .)
+          .cache/goresym -about > type-evidence/goresym-about.txt
+
+      - name: Recover modern types and interfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          .cache/goresym -t -d -p .cache/RevolutionMacro.exe > type-evidence/goresym.json
+          .cache/goresym -t -d -p -human .cache/RevolutionMacro.exe > type-evidence/goresym-human.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+
+          jp = Path('type-evidence/goresym.json')
+          hp = Path('type-evidence/goresym-human.txt')
+          obj = json.loads(jp.read_text(encoding='utf-8'))
+          human = hp.read_text(encoding='utf-8', errors='replace').splitlines()
+
+          out = []
+          out.append('Version=' + str(obj.get('Version')))
+          out.append('Arch=' + str(obj.get('Arch')))
+          mm = obj.get('ModuleMeta') or {}
+          out.append('ModuleMeta=' + json.dumps(mm, sort_keys=True))
+          out.append('TypesCount=' + str(len(obj.get('Types') or [])))
+          out.append('InterfacesCount=' + str(len(obj.get('Interfaces') or [])))
+          out.append('')
+
+          needles = re.compile(r'(?i)(github\.com/nosyliam/revolution/pkg/common.*Macro|WatchMovement|MoveSpeed|UpdateSpeed|movement|buff|speed|InputManager|WalkAlign|WalkAsync|\.Walk\b)')
+          hits = [i for i,line in enumerate(human) if needles.search(line)]
+          emitted = set()
+          out.append('===== RELEVANT HUMAN TYPE CONTEXT =====')
+          for i in hits:
+              lo=max(0,i-8); hi=min(len(human),i+18)
+              key=(lo,hi)
+              if any(a<=i<b for a,b in emitted):
+                  continue
+              emitted.add(key)
+              out.append(f'--- lines {lo+1}-{hi} ---')
+              out.extend(human[lo:hi])
+
+          # Recursive JSON search keeps full evidence while surfacing any type or
+          # interface objects whose own serialized form mentions movement concepts.
+          relevant=[]
+          def walk(x,path='$'):
+              if isinstance(x,dict):
+                  blob=json.dumps(x,sort_keys=True,ensure_ascii=False)
+                  if len(blob) < 120000 and needles.search(blob):
+                      relevant.append((path,x))
+                  for k,v in x.items():
+                      walk(v,path+'.'+str(k))
+              elif isinstance(x,list):
+                  for idx,v in enumerate(x):
+                      walk(v,f'{path}[{idx}]')
+          for root_key in ('Types','Interfaces'):
+              if root_key in obj:
+                  walk(obj[root_key],'$.'+root_key)
+          out.append('')
+          out.append('===== RELEVANT JSON OBJECTS =====')
+          seen=set()
+          for path,item in relevant:
+              blob=json.dumps(item,sort_keys=True,ensure_ascii=False)
+              sig=(path,blob)
+              if sig in seen: continue
+              seen.add(sig)
+              out.append(path)
+              out.append(blob)
+
+          Path('type-evidence/relevant.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out[:2500]))
+          PY
+
+      - name: Assert useful type recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'github.com/nosyliam/revolution/pkg/common' type-evidence/goresym-human.txt
+          grep -Eq 'Macro|WatchMovement' type-evidence/relevant.txt
+
+      - name: Upload type evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-go-type-metadata
+          path: type-evidence/
+          if-no-files-found: error
