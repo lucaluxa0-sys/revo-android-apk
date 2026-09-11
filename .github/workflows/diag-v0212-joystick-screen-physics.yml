@@ -1,0 +1,413 @@
+name: Diagnose v0.2.12 joystick screen-space physics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v0212-joystick-screen-physics.yml'
+      - 'tools/patch-native-v0212-joystick-hold.py'
+      - 'tools/patch-native-v0212-template-contrast.py'
+      - 'tools/patch-native-v0212-template-core.py'
+      - '.ci/enable_revo_accessibility.py'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+
+permissions:
+  contents: read
+
+jobs:
+  screen-physics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+
+      - name: Restore patched Revolution source and add CI-only physics probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-field-routing.py
+          python3 tools/patch-native-v0212-template-contrast.py
+
+          cat > revo-android/app/src/main/java/com/revolution/android/RevoPhysicsProbeReceiver.java <<'EOF'
+          package com.revolution.android;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Point;
+          import android.util.Log;
+          import android.view.Display;
+          import android.view.WindowManager;
+
+          public final class RevoPhysicsProbeReceiver extends BroadcastReceiver {
+              private static final String TAG = "RevoPhysicsProbe";
+
+              @Override public void onReceive(Context context, Intent intent) {
+                  RevoAccessibilityService svc = RevoAccessibilityService.get();
+                  String id = intent == null ? "" : intent.getStringExtra("id");
+                  String mode = intent == null ? "" : intent.getStringExtra("mode");
+                  int holdMs = intent == null ? 0 : intent.getIntExtra("holdMs", 0);
+                  if (id == null) id = "";
+                  if (mode == null) mode = "";
+                  if (svc == null) {
+                      Log.e(TAG, "PHYSICS_DISPATCH id=" + id + " serviceMissing=true");
+                      return;
+                  }
+
+                  WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+                  Display display = wm.getDefaultDisplay();
+                  Point size = new Point();
+                  display.getRealSize(size);
+                  int displayId = display.getDisplayId();
+                  float w = size.x, h = size.y;
+                  float cx = w * 0.16f, cy = h * 0.78f;
+                  float r = Math.min(w, h) * 0.085f;
+                  float jumpX = w * 0.88f, jumpY = h * 0.78f;
+                  float tx, ty;
+                  boolean accepted;
+
+                  if ("right".equals(mode) || "double-1650".equals(mode)) {
+                      tx = cx + r; ty = cy;
+                  } else {
+                      float q = (float)(r / Math.sqrt(2.0));
+                      tx = cx - q; ty = cy - q;
+                  }
+
+                  Log.i(TAG, "PHYSICS_DISPATCH id=" + id
+                          + " mode=" + mode + " holdMs=" + holdMs
+                          + " display=" + displayId + " w=" + size.x + " h=" + size.y
+                          + " cx=" + cx + " cy=" + cy + " r=" + r
+                          + " tx=" + tx + " ty=" + ty
+                          + " jumpX=" + jumpX + " jumpY=" + jumpY);
+
+                  if ("right".equals(mode) || "diag-forward-left".equals(mode)) {
+                      accepted = svc.joystick(displayId, cx, cy, tx, ty, holdMs);
+                  } else if ("double-1650".equals(mode)) {
+                      accepted = svc.joystickWithDoubleTap(
+                              displayId, cx, cy, tx, ty, 1650,
+                              jumpX, jumpY, 70, 1300);
+                  } else if ("timed-6050".equals(mode)) {
+                      accepted = svc.joystickWithTimedTaps(
+                              displayId, cx, cy, tx, ty, 6050,
+                              jumpX, jumpY, 70, new long[]{0L, 850L, 5670L});
+                  } else {
+                      Log.e(TAG, "PHYSICS_DISPATCH id=" + id + " unknownMode=" + mode);
+                      return;
+                  }
+                  Log.i(TAG, "PHYSICS_ACCEPTED id=" + id + " accepted=" + accepted);
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('revo-android/app/src/main/AndroidManifest.xml')
+          text = p.read_text()
+          marker = '</application>'
+          if text.count(marker) != 1:
+              raise SystemExit('unexpected AndroidManifest application count')
+          receiver = '''        <receiver android:name=".RevoPhysicsProbeReceiver" android:exported="true">\n            <intent-filter><action android:name="com.revolution.android.PHYSICS_PROBE" /></intent-filter>\n        </receiver>\n'''
+          text = text.replace(marker, receiver + marker, 1)
+          p.write_text(text)
+          PY
+
+          grep -q 'runJoystickTapSequence' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'fullDeflectionMs=' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'RevoPhysicsProbeReceiver' revo-android/app/src/main/AndroidManifest.xml
+
+      - name: Restore exact desktop frontend and Android overlays
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache revo-android/app/src/main/assets/www /tmp/hashprobe
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo "0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe" | sha256sum -c -
+          python3 revo-android/extract_revo_frontend.py .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www
+          cp revo-android/app/src/main/assets/www/index.android.html revo-android/app/src/main/assets/www/index.html
+          npm install --silent --prefix /tmp/hashprobe rollup@4.50.0
+          node tools/recover-vite-pngs.js .cache/RevolutionMacro.exe revo-android/app/src/main/assets/www /tmp/hashprobe/node_modules/rollup/dist/native.js
+          python3 tools/patch-revo-frontend-v028.py "$(find revo-android/app/src/main/assets/www/assets -maxdepth 1 -name 'index-*.js' | head -n1)"
+          cat patches/android-wails-shim-v0.2.4.js \
+              patches/android-backend-v0.2.5.js \
+              patches/android-backend-v0.2.6.js \
+              patches/android-backend-v0.2.8.js \
+              patches/android-backend-v0.2.8.1.js \
+              patches/android-backend-v0.2.8.2.js \
+              patches/android-backend-v0.2.9.js \
+              patches/android-backend-v0.2.10.js \
+              > revo-android/app/src/main/assets/www/android-wails-shim.js
+
+      - name: Build patched Revolution APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p revo-android --stacktrace clean :app:assembleDebug
+          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build MotionEvent physics receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fake-physics/app/src/main/java/com/roblox/client fake-physics/app/src/main/res/values
+          cat > fake-physics/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "FakeRobloxPhysics"
+          include(":app")
+          EOF
+          cat > fake-physics/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") version "8.12.2" apply false }
+          EOF
+          cat > fake-physics/app/build.gradle.kts <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+              namespace = "com.roblox.client"
+              compileSdk = 36
+              defaultConfig { applicationId = "com.roblox.client"; minSdk = 30; targetSdk = 36; versionCode = 1; versionName = "1.0" }
+          }
+          EOF
+          cat > fake-physics/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowFullscreen">true</item></style></resources>
+          EOF
+          cat > fake-physics/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:theme="@style/AppTheme" android:label="Fake Roblox Physics CI">
+              <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+                <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+              </activity>
+              <receiver android:name=".LabelReceiver" android:exported="true">
+                <intent-filter><action android:name="com.roblox.client.PHYSICS_LABEL"/></intent-filter>
+              </receiver>
+            </application>
+          </manifest>
+          EOF
+          cat > fake-physics/app/src/main/java/com/roblox/client/MainActivity.java <<'EOF'
+          package com.roblox.client;
+          import android.app.Activity;
+          import android.content.Context;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.view.MotionEvent;
+          import android.view.View;
+
+          public class MainActivity extends Activity {
+              static volatile String label = "boot";
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  setContentView(new PhysicsView(this));
+              }
+              static String actionName(int a) {
+                  switch (a) {
+                      case MotionEvent.ACTION_DOWN: return "DOWN";
+                      case MotionEvent.ACTION_UP: return "UP";
+                      case MotionEvent.ACTION_MOVE: return "MOVE";
+                      case MotionEvent.ACTION_CANCEL: return "CANCEL";
+                      case MotionEvent.ACTION_POINTER_DOWN: return "POINTER_DOWN";
+                      case MotionEvent.ACTION_POINTER_UP: return "POINTER_UP";
+                      default: return "A" + a;
+                  }
+              }
+              static final class PhysicsView extends View {
+                  final Paint p = new Paint();
+                  PhysicsView(Context c) { super(c); setClickable(true); p.setTextSize(38f); }
+                  @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+                      Log.i("RevoPhysicsReceiver", "PHYSICS_VIEW w=" + w + " h=" + h);
+                  }
+                  @Override protected void onDraw(Canvas c) {
+                      c.drawColor(Color.rgb(24, 30, 44));
+                      p.setColor(Color.WHITE);
+                      c.drawText("Revolution joystick physics receiver: " + label, 40, 100, p);
+                  }
+                  @Override public boolean onTouchEvent(MotionEvent e) {
+                      StringBuilder b = new StringBuilder();
+                      b.append("PHYSICS_EVENT label=").append(label)
+                       .append(" action=").append(actionName(e.getActionMasked()))
+                       .append(" eventMs=").append(e.getEventTime())
+                       .append(" downMs=").append(e.getDownTime())
+                       .append(" pointers=").append(e.getPointerCount())
+                       .append(" actionIndex=").append(e.getActionIndex());
+                      for (int i = 0; i < e.getPointerCount(); i++) {
+                          b.append(" p").append(i).append("id=").append(e.getPointerId(i))
+                           .append(" p").append(i).append("x=").append(e.getRawX(i))
+                           .append(" p").append(i).append("y=").append(e.getRawY(i));
+                      }
+                      Log.i("RevoPhysicsReceiver", b.toString());
+                      return true;
+                  }
+              }
+          }
+          EOF
+          cat > fake-physics/app/src/main/java/com/roblox/client/LabelReceiver.java <<'EOF'
+          package com.roblox.client;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.util.Log;
+          public final class LabelReceiver extends BroadcastReceiver {
+              @Override public void onReceive(Context c, Intent i) {
+                  String v = i == null ? "" : i.getStringExtra("label");
+                  MainActivity.label = v == null ? "" : v;
+                  Log.i("RevoPhysicsReceiver", "PHYSICS_LABEL label=" + MainActivity.label);
+              }
+          }
+          EOF
+          gradle -p fake-physics --stacktrace :app:assembleDebug
+          test -s fake-physics/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Measure API 35 joystick event geometry and timing
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -eu
+            mkdir -p emulator-artifacts
+            adb install -r fake-physics/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r revo-android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell cmd appops set com.revolution.android ACCESS_RESTRICTED_SETTINGS allow
+            adb shell am start -W -n com.revolution.android/.MainActivity > emulator-artifacts/revo-start.txt
+            python3 .ci/enable_revo_accessibility.py
+            adb shell settings get secure enabled_accessibility_services > emulator-artifacts/enabled-setting.txt
+            grep -Fq 'com.revolution.android.RevoAccessibilityService' emulator-artifacts/enabled-setting.txt
+
+            adb logcat -c
+            adb logcat -v time > emulator-artifacts/logcat.txt 2>&1 &
+            LPID=$!
+            trap 'kill "$LPID" 2>/dev/null || true; wait "$LPID" 2>/dev/null || true' EXIT
+            adb shell am start -W -n com.roblox.client/.MainActivity > emulator-artifacts/receiver-start.txt
+            sleep 2
+
+            probe() {
+              id="$1"; mode="$2"; hold="$3"; pause="$4"
+              adb shell am broadcast -n com.roblox.client/.LabelReceiver -a com.roblox.client.PHYSICS_LABEL --es label "$id" >/dev/null
+              sleep 0.15
+              adb shell am broadcast -n com.revolution.android/.RevoPhysicsProbeReceiver -a com.revolution.android.PHYSICS_PROBE --es id "$id" --es mode "$mode" --ei holdMs "$hold" > "emulator-artifacts/broadcast-${id}.txt"
+              sleep "$pause"
+            }
+
+            probe right_100 right 100 0.8
+            probe right_250 right 250 1.0
+            probe right_500 right 500 1.2
+            probe right_1000 right 1000 1.7
+            probe right_1650 right 1650 2.4
+            probe right_6050 right 6050 7.0
+            probe diag_1000 diag-forward-left 1000 1.7
+            probe double_1650 double-1650 1650 2.9
+            probe timed_6050 timed-6050 6050 8.0
+
+            kill "$LPID" 2>/dev/null || true
+            wait "$LPID" 2>/dev/null || true
+            trap - EXIT
+            grep -E 'RevoPhysicsProbe|RevoPhysicsReceiver|RevoJoystickHold' emulator-artifacts/logcat.txt > emulator-artifacts/physics-flow.txt || true
+            cat emulator-artifacts/physics-flow.txt
+
+            python3 - <<'PY'
+            import json, math, re
+            from pathlib import Path
+
+            text = Path('emulator-artifacts/physics-flow.txt').read_text(errors='replace')
+            lines = text.splitlines()
+            bad = [x for x in lines if 'RevoJoystickHold' in x and any(k in x for k in (
+                'sequenceFailed=true','Cancelled=true','DispatchRejected=true','busyRejected=true'))]
+            if bad:
+                raise SystemExit('joystick service failure: ' + repr(bad[:10]))
+
+            dispatch_re = re.compile(r'PHYSICS_DISPATCH id=(\S+) mode=(\S+) holdMs=(\d+).*?cx=([\d.\-]+) cy=([\d.\-]+) r=([\d.\-]+) tx=([\d.\-]+) ty=([\d.\-]+) jumpX=([\d.\-]+) jumpY=([\d.\-]+)')
+            event_re = re.compile(r'PHYSICS_EVENT label=(\S+) action=(\S+) eventMs=(\d+).*?p0x=([\d.\-]+) p0y=([\d.\-]+)')
+            dispatch = {}
+            events = {}
+            for line in lines:
+                m = dispatch_re.search(line)
+                if m:
+                    dispatch[m.group(1)] = {
+                        'mode':m.group(2),'holdMs':int(m.group(3)),'cx':float(m.group(4)),'cy':float(m.group(5)),
+                        'r':float(m.group(6)),'tx':float(m.group(7)),'ty':float(m.group(8)),
+                        'jumpX':float(m.group(9)),'jumpY':float(m.group(10))}
+                m = event_re.search(line)
+                if m:
+                    events.setdefault(m.group(1), []).append({'action':m.group(2),'t':int(m.group(3)),'x':float(m.group(4)),'y':float(m.group(5))})
+
+            def dist(a,b,c,d): return math.hypot(a-c,b-d)
+            report = {'claim':'screen-space gesture physics only; no Roblox stud calibration claimed','ordinary':{},'route_sequences':{}}
+            ordinary_ids = ['right_100','right_250','right_500','right_1000','right_1650','right_6050','diag_1000']
+            for ident in ordinary_ids:
+                d = dispatch.get(ident); ev = events.get(ident, [])
+                if not d or not ev: raise SystemExit('missing ordinary evidence: ' + ident)
+                if any(e['action']=='CANCEL' for e in ev): raise SystemExit('ACTION_CANCEL: ' + ident)
+                downs = [e for e in ev if e['action']=='DOWN']; ups = [e for e in ev if e['action']=='UP']
+                if len(downs)!=1 or len(ups)!=1: raise SystemExit(f'unexpected pointer lifecycle {ident}: down={len(downs)} up={len(ups)}')
+                down, up = downs[0], ups[-1]
+                if dist(down['x'],down['y'],d['cx'],d['cy']) > 4.0: raise SystemExit('bad joystick center: ' + ident)
+                endpoint_candidates = [e for e in ev if dist(e['x'],e['y'],d['tx'],d['ty']) <= 4.0]
+                if not endpoint_candidates: raise SystemExit('joystick never reached endpoint: ' + ident)
+                endpoint = endpoint_candidates[0]
+                acquire = endpoint['t'] - down['t']
+                if acquire > 120: raise SystemExit(f'slow joystick acquisition {ident}: {acquire}ms')
+                full = up['t'] - endpoint['t']
+                tol = max(55, round(d['holdMs'] * 0.03))
+                if abs(full - d['holdMs']) > tol: raise SystemExit(f'full-deflection timing drift {ident}: measured={full} requested={d["holdMs"]} tol={tol}')
+                tail = [e for e in ev if endpoint['t'] <= e['t'] <= up['t']]
+                drift = max(dist(e['x'],e['y'],d['tx'],d['ty']) for e in tail)
+                if drift > 4.0: raise SystemExit(f'endpoint drift {ident}: {drift:.2f}px')
+                actual_r = dist(down['x'],down['y'],endpoint['x'],endpoint['y'])
+                if abs(actual_r-d['r']) > 4.0: raise SystemExit(f'radius mismatch {ident}: actual={actual_r:.2f} requested={d["r"]:.2f}')
+                report['ordinary'][ident] = {'requestedHoldMs':d['holdMs'],'acquireMs':acquire,'measuredFullDeflectionMs':full,'timingErrorMs':full-d['holdMs'],'endpointDriftPx':drift,'requestedRadiusPx':d['r'],'measuredRadiusPx':actual_r}
+
+            for ident, expected_hold, expected_taps, expected_segments in [('double_1650',1650,2,2),('timed_6050',6050,3,3)]:
+                d = dispatch.get(ident); ev = events.get(ident, [])
+                if not d or not ev: raise SystemExit('missing route evidence: ' + ident)
+                if any(e['action']=='CANCEL' for e in ev): raise SystemExit('ACTION_CANCEL: ' + ident)
+                jumps = [e for e in ev if e['action']=='DOWN' and dist(e['x'],e['y'],d['jumpX'],d['jumpY']) <= 5.0]
+                moves = [e for e in ev if e['action']=='DOWN' and dist(e['x'],e['y'],d['cx'],d['cy']) <= 5.0]
+                if len(jumps) != expected_taps: raise SystemExit(f'jump count mismatch {ident}: {len(jumps)}')
+                if len(moves) != expected_segments: raise SystemExit(f'movement segment count mismatch {ident}: {len(moves)}')
+                completion = [x for x in lines if 'RevoJoystickHold' in x and 'holdCompleted=true' in x and 'sequenceCompleted=true' in x and f'holdMs={expected_hold}' in x and f'fullDeflectionMs={expected_hold}' in x and f'tapCount={expected_taps}' in x]
+                if not completion: raise SystemExit('missing authoritative sequence completion: ' + ident)
+                wall = max(e['t'] for e in ev) - min(e['t'] for e in ev)
+                report['route_sequences'][ident] = {'fullDeflectionMs':expected_hold,'jumpCount':len(jumps),'movementSegments':len(moves),'receiverWallClockMs':wall,'serializedOverheadMs':wall-expected_hold}
+
+            Path('emulator-artifacts/screen-physics.json').write_text(json.dumps(report, indent=2) + '\n')
+            print(json.dumps(report, indent=2))
+            print('PASS: API35 screen-space joystick geometry/timing measured; Roblox stud calibration intentionally not claimed')
+            PY
+
+      - name: Upload joystick screen-physics evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0212-joystick-screen-physics
+          path: emulator-artifacts/
+          if-no-files-found: warn
