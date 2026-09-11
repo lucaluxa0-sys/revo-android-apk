@@ -2,9 +2,12 @@
 from pathlib import Path
 
 ROUTER = Path('revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java')
+SERVICE = Path('revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java')
+MACRO = Path('revo-android/app/src/main/java/com/revolution/android/MacroEngine.java')
 
-if not ROUTER.exists():
-    raise SystemExit('RevoPreGatherRouter.java missing; run patch-native-v0212-hive-routing.py first')
+for path in (ROUTER, SERVICE, MACRO):
+    if not path.exists():
+        raise SystemExit(f'{path.name} missing; apply the v0.2.12 native patch sequence first')
 
 text = ROUTER.read_text(encoding='utf-8')
 
@@ -106,11 +109,103 @@ new = r'''    private static Match match(int[] frame, int fw, int fh, Template t
 
 if text.count(old) != 1:
     raise SystemExit('template matcher anchor missing or duplicated')
-
 text = text.replace(old, new, 1)
+
+status_anchor = '''    void appendState(JSONObject o) {\n'''
+status_method = '''    String statusSummary() {\n        return state.name() + "/" + lastDecision;\n    }\n\n'''
+if text.count(status_anchor) != 1:
+    raise SystemExit('router status anchor missing or duplicated')
+text = text.replace(status_anchor, status_method + status_anchor, 1)
 ROUTER.write_text(text, encoding='utf-8')
 
-if 'maskedBackgroundHasContrast' not in text or 'bestError' not in text:
-    raise SystemExit('template contrast/fidelity matcher was not installed')
+if 'maskedBackgroundHasContrast' not in text or 'bestError' not in text or 'String statusSummary()' not in text:
+    raise SystemExit('router matcher/status diagnostics were not installed')
 
-print('Patched v0.2.12 template matcher to reject uniform masks and prefer highest-fidelity candidates')
+svc = SERVICE.read_text(encoding='utf-8')
+old_foreground = r'''    public String activePackageName() {
+        try {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null) {
+                String pkg = String.valueOf(root.getPackageName());
+                if (!pkg.isEmpty()) activePackageName = pkg;
+            }
+        } catch (Throwable ignored) {}
+        return activePackageName == null ? "" : activePackageName;
+    }
+
+    public boolean isRobloxForeground() {
+        String pkg = activePackageName();
+        return "com.roblox.client".equals(pkg) || "com.roblox.client.samsunggalaxy".equals(pkg);
+    }
+'''
+new_foreground = r'''    private static boolean isRobloxPackageName(String pkg) {
+        return pkg != null && ("com.roblox.client".equals(pkg)
+                || "com.roblox.client.samsunggalaxy".equals(pkg)
+                || pkg.startsWith("com.roblox."));
+    }
+
+    public String activePackageName() {
+        String fallback = "";
+        try {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null && root.getPackageName() != null) {
+                String pkg = String.valueOf(root.getPackageName());
+                if (!pkg.isEmpty()) {
+                    activePackageName = pkg;
+                    if (isRobloxPackageName(pkg)) return pkg;
+                    fallback = pkg;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // Real Roblox can be a mostly rendered surface and occasionally gives
+        // Accessibility no useful active root even while its window is focused.
+        // The service already requests FLAG_RETRIEVE_INTERACTIVE_WINDOWS, so use
+        // active/focused Accessibility windows as a second source. We deliberately
+        // do NOT accept an arbitrary background Roblox window: the foreground
+        // safety gate remains intact before any macro gesture is dispatched.
+        try {
+            java.util.List<android.view.accessibility.AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null) {
+                for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+                    if (window == null || !(window.isActive() || window.isFocused())) continue;
+                    AccessibilityNodeInfo root = window.getRoot();
+                    if (root == null || root.getPackageName() == null) continue;
+                    String pkg = String.valueOf(root.getPackageName());
+                    if (pkg.isEmpty()) continue;
+                    if (isRobloxPackageName(pkg)) {
+                        activePackageName = pkg;
+                        return pkg;
+                    }
+                    if (fallback.isEmpty()) fallback = pkg;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (!fallback.isEmpty()) activePackageName = fallback;
+        return activePackageName == null ? "" : activePackageName;
+    }
+
+    public boolean isRobloxForeground() {
+        return isRobloxPackageName(activePackageName());
+    }
+'''
+if svc.count(old_foreground) != 1:
+    raise SystemExit('Accessibility foreground anchor missing or duplicated')
+svc = svc.replace(old_foreground, new_foreground, 1)
+SERVICE.write_text(svc, encoding='utf-8')
+
+macro = MACRO.read_text(encoding='utf-8')
+old_status = '        status = String.format(java.util.Locale.US, "Running • display %d • %.1f fps", displayId, fps);\n'
+new_status = '''        RevoAccessibilityService svc = RevoAccessibilityService.get();\n        String pkg = svc == null ? "" : svc.activePackageName();\n        if (pkg.isEmpty()) pkg = "<none>";\n        status = String.format(java.util.Locale.US,\n                "Running • display %d • %.1f fps • pkg=%s • route=%s",\n                displayId, fps, pkg, routing.statusSummary());\n'''
+if macro.count(old_status) != 1:
+    raise SystemExit('MacroEngine running-status anchor missing or duplicated')
+macro = macro.replace(old_status, new_status, 1)
+MACRO.write_text(macro, encoding='utf-8')
+
+if 'getWindows()' not in svc or 'isRobloxPackageName' not in svc:
+    raise SystemExit('Accessibility real-phone foreground fallback was not installed')
+if 'pkg=%s • route=%s' not in macro:
+    raise SystemExit('visible real-phone routing diagnostics were not installed')
+
+print('Patched v0.2.12 template matcher plus real-phone foreground/router diagnostics')
