@@ -37,20 +37,22 @@ jobs:
           set -euo pipefail
 
           go tool nm -sort address .cache/RevolutionMacro.exe \
-            > lit-transform-evidence/go-nm.txt
+            > lit-transform-evidence/go-nm.txt 2> lit-transform-evidence/go-nm.stderr.txt || true
           grep -Ei 'codec|walkStrings|EncodeValue|DecodeValue' \
             lit-transform-evidence/go-nm.txt \
             > lit-transform-evidence/codec-symbols.txt || true
 
           go tool objdump -s 'codec' .cache/RevolutionMacro.exe \
-            > lit-transform-evidence/go-codec-objdump.txt || true
+            > lit-transform-evidence/go-codec-objdump.txt 2> lit-transform-evidence/go-codec-objdump.stderr.txt || true
 
+          objdump -h .cache/RevolutionMacro.exe \
+            > lit-transform-evidence/pe-sections.txt
           objdump -d -M intel \
             --start-address=0x140a19d00 --stop-address=0x140a1a300 \
             .cache/RevolutionMacro.exe \
             > lit-transform-evidence/closure-disassembly.txt
 
-          grep -E '140a19e60|140a19ea0|140a19ee0|140a19f20|140a19f|140a1a0|call' \
+          grep -E '140a19e60|140a19ea0|140a19ee0|140a19f20|140a19f|140a1a0|call|xor|rol|ror|imul|add|sub' \
             lit-transform-evidence/closure-disassembly.txt \
             > lit-transform-evidence/closure-key-lines.txt || true
 
@@ -59,11 +61,14 @@ jobs:
             > lit-transform-evidence/relevant-strings.txt || true
 
           {
+            echo '===== GO NM STDERR ====='
+            cat lit-transform-evidence/go-nm.stderr.txt || true
+            echo
             echo '===== CODEC SYMBOLS ====='
-            cat lit-transform-evidence/codec-symbols.txt
+            cat lit-transform-evidence/codec-symbols.txt || true
             echo
             echo '===== CLOSURE KEY LINES ====='
-            cat lit-transform-evidence/closure-key-lines.txt
+            cat lit-transform-evidence/closure-key-lines.txt || true
           } | tee lit-transform-evidence/summary.txt
 
           test -s lit-transform-evidence/closure-disassembly.txt
