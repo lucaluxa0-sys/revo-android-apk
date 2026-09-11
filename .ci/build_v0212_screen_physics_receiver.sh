@@ -41,7 +41,7 @@ EOF
 cat > fake-physics/app/src/main/AndroidManifest.xml <<'EOF'
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application android:theme="@style/AppTheme" android:label="Fake Roblox Physics CI">
-    <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+    <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
@@ -98,7 +98,11 @@ public class MainActivity extends Activity {
         }
 
         @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
-            Log.i("RevoPhysicsReceiver", "PHYSICS_VIEW w=" + w + " h=" + h);
+            Log.i("RevoPhysicsReceiver", "PHYSICS_VIEW w=" + w + " h=" + h + " required=landscape");
+            if (w <= h) {
+                Log.e("RevoPhysicsReceiver", "PHYSICS_ORIENTATION_INVALID w=" + w + " h=" + h + " required=landscape");
+                throw new IllegalStateException("strict screen-physics receiver must be landscape");
+            }
         }
 
         @Override protected void onDraw(Canvas canvas) {
