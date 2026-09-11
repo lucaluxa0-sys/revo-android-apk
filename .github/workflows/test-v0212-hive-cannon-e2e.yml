@@ -8,13 +8,27 @@ on:
       - '.github/workflows/test-v0212-hive-cannon-e2e.yml'
       - '.ci/enable_revo_accessibility.py'
       - '.ci/verify_v0212_hive_cannon_e2e.py'
+      - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/patch-native-v0212-hive-routing.py'
       - 'tools/patch-native-v0212-field-routing.py'
       - 'tools/patch-native-v0212-template-contrast.py'
       - 'tools/patch-native-v0212-template-core.py'
       - 'tools/patch-native-v0212-joystick-hold.py'
-      - 'tools/patch-native-v0211-bee-swarm-launch.py'
+      - 'tools/patch-native-v0212-joystick-callback-thread.py'
+      - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
+      - 'tools/patch-native-v0212-movement-speed.py'
       - 'tools/instrument-v0211-elol-e2e.py'
+      - 'tools/patch-revo-frontend-v028.py'
+      - 'tools/recover-vite-pngs.js'
+      - 'revo-android/extract_revo_frontend.py'
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'patches/android-backend-v0.2.5.js'
+      - 'patches/android-backend-v0.2.6.js'
+      - 'patches/android-backend-v0.2.8.js'
+      - 'patches/android-backend-v0.2.8.1.js'
+      - 'patches/android-backend-v0.2.8.2.js'
+      - 'patches/android-backend-v0.2.9.js'
+      - 'patches/android-backend-v0.2.10.js'
       - 'third_party/revolution-2025-gpl/macro/routines/hive/**'
       - 'third_party/revolution-2025-gpl/bitmaps/hive/**'
       - 'third_party/revolution-2025-gpl/bitmaps/interact/press_e.png'
@@ -54,7 +68,18 @@ jobs:
           python3 tools/patch-native-v0212-field-routing.py
           python3 tools/patch-native-v0212-template-contrast.py
           python3 tools/instrument-v0211-elol-e2e.py
-          python3 -m py_compile tools/patch-native-v0211-bee-swarm-launch.py tools/patch-native-v0212-hive-routing.py tools/patch-native-v0212-field-routing.py tools/patch-native-v0212-template-contrast.py tools/patch-native-v0212-template-core.py tools/patch-native-v0212-joystick-hold.py tools/instrument-v0211-elol-e2e.py .ci/verify_v0212_hive_cannon_e2e.py
+          python3 -m py_compile \
+            tools/patch-native-v0211-bee-swarm-launch.py \
+            tools/patch-native-v0212-hive-routing.py \
+            tools/patch-native-v0212-field-routing.py \
+            tools/patch-native-v0212-template-contrast.py \
+            tools/patch-native-v0212-template-core.py \
+            tools/patch-native-v0212-joystick-hold.py \
+            tools/patch-native-v0212-joystick-callback-thread.py \
+            tools/patch-native-v0212-joystick-prequeue-continuation.py \
+            tools/patch-native-v0212-movement-speed.py \
+            tools/instrument-v0211-elol-e2e.py \
+            .ci/verify_v0212_hive_cannon_e2e.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'desktop GotoCannon: Forward 12' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
@@ -68,8 +93,14 @@ jobs:
           grep -q 'joystickWithDoubleTap' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'continuationAccepted=' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'continuationQueue=prequeued-before-acquire-completion-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'cameraYawSteps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'getWindows()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'roblox-foreground-frame-delta-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'class RevoMovementSpeed' revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
+          grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           test -s revo-android/app/src/main/assets/revo-routing/claimhive.png
           test -s revo-android/app/src/main/assets/revo-routing/press_e.png
 
@@ -95,7 +126,14 @@ jobs:
               patches/android-backend-v0.2.9.js \
               patches/android-backend-v0.2.10.js \
               > revo-android/app/src/main/assets/www/android-wails-shim.js
-          node --check revo-android/app/src/main/assets/www/android-wails-shim.js
+          SHIM=revo-android/app/src/main/assets/www/android-wails-shim.js
+          node --check "$SHIM"
+          grep -q "'e_lol'" "$SHIM"
+          grep -Fq "joystickCenterX: localNumber('revo.android.joystickCenterX', 0.09583333333333334)" "$SHIM"
+          grep -Fq "joystickCenterY: localNumber('revo.android.joystickCenterY', 0.8657407407407407)" "$SHIM"
+          grep -Fq "joystickRadius: localNumber('revo.android.joystickRadius', 0.08333333333333333)" "$SHIM"
+          grep -Fq "jumpX: localNumber('revo.android.jumpX', 0.90375)" "$SHIM"
+          grep -Fq "jumpY: localNumber('revo.android.jumpY', 0.8648148148148148)" "$SHIM"
 
       - name: Build Revolution full-routing APK
         shell: bash
