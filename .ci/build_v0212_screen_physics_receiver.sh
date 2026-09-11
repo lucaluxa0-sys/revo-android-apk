@@ -63,6 +63,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -107,11 +108,17 @@ public class MainActivity extends Activity {
         }
 
         @Override public boolean onTouchEvent(MotionEvent event) {
+            long recvUptimeMs = SystemClock.uptimeMillis();
+            long recvElapsedMs = SystemClock.elapsedRealtime();
             StringBuilder out = new StringBuilder();
             out.append("PHYSICS_EVENT label=").append(label)
                .append(" action=").append(actionName(event.getActionMasked()))
                .append(" eventMs=").append(event.getEventTime())
                .append(" downMs=").append(event.getDownTime())
+               .append(" recvUptimeMs=").append(recvUptimeMs)
+               .append(" recvElapsedMs=").append(recvElapsedMs)
+               .append(" deliveryLagMs=").append(recvUptimeMs - event.getEventTime())
+               .append(" historySize=").append(event.getHistorySize())
                .append(" pointers=").append(event.getPointerCount())
                .append(" actionIndex=").append(event.getActionIndex());
             for (int i = 0; i < event.getPointerCount(); i++) {
