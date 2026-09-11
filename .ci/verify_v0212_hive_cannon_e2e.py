@@ -40,6 +40,34 @@ missing = [item for item in required if item not in text]
 if missing:
     raise SystemExit('missing runtime evidence: ' + repr(missing))
 
+# Full-deflection parity gate: the decoded cannon launch requests a 6050 ms
+# direction hold. Require Android to accept and complete that continued
+# endpoint stroke, not merely dispatch the initial center->edge acquisition.
+continuation_6050 = [
+    line for line in text.splitlines()
+    if 'RevoJoystickHold' in line
+    and 'continuationAccepted=true' in line
+    and 'holdMs=6050' in line
+]
+completed_6050 = [
+    line for line in text.splitlines()
+    if 'RevoJoystickHold' in line
+    and 'holdCompleted=true' in line
+    and 'holdMs=6050' in line
+]
+if not continuation_6050:
+    raise SystemExit('no accepted full-deflection 6050ms joystick continuation')
+if not completed_6050:
+    raise SystemExit('no completed full-deflection 6050ms joystick hold')
+
+cancelled = [
+    line for line in text.splitlines()
+    if 'RevoJoystickHold' in line
+    and ('acquireCancelled=true' in line or 'holdCancelled=true' in line)
+]
+if cancelled:
+    raise SystemExit('joystick continuation cancellation observed: ' + repr(cancelled[:8]))
+
 # Enforce the real causal order rather than accepting the same markers out of sequence.
 ordered = [
     'FAKE_CLAIM_TAP',
@@ -98,10 +126,11 @@ assert routing.get('fieldRouteDatasetSha256') == 'c0a499ba9512b4282bc3f59bdf9daa
 assert routing.get('currentYawSlot') == 2, routing
 assert (routing.get('fieldRouteActionCount') or 0) >= 8, routing
 assert routing.get('lastGestureAccepted') is True, routing
+assert routing.get('androidInputAdaptation') == 'accessibility-joystick-hold-v2', routing
 assert (state.get('actionCount') or 0) > 0, state
 assert (state.get('visualMovementSamples') or 0) >= 1, state
 assert (state.get('visualMovementConfirmedSamples') or 0) >= 1, state
 assert state.get('activePackage') == 'com.roblox.client', state
 assert not (state.get('routineLastError') or ''), state
 
-print('PASS: real Start -> Bee Swarm -> ClaimHive -> GotoCannon -> decoded Pine Tree route -> e_lol with confirmed world-view movement')
+print('PASS: real Start -> Bee Swarm -> ClaimHive -> GotoCannon -> decoded Pine Tree route -> full-deflection Android hold -> e_lol with confirmed world-view movement')
