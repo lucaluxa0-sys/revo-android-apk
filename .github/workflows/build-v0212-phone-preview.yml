@@ -6,6 +6,16 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/build-v0212-phone-preview.yml'
+      - 'tools/patch-native-v0211-bee-swarm-launch.py'
+      - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-field-routing.py'
+      - 'tools/patch-native-v0212-template-contrast.py'
+      - 'tools/patch-native-v0212-template-core.py'
+      - 'tools/patch-native-v0212-joystick-hold.py'
+      - 'tools/patch-native-v0212-joystick-callback-thread.py'
+      - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
+      - 'tools/patch-native-v0212-movement-speed.py'
+      - 'patches/android-backend-v0.2.10.js'
 
 permissions:
   contents: read
@@ -41,13 +51,20 @@ jobs:
             tools/patch-native-v0211-bee-swarm-launch.py \
             tools/patch-native-v0212-hive-routing.py \
             tools/patch-native-v0212-field-routing.py \
-            tools/patch-native-v0212-template-contrast.py
+            tools/patch-native-v0212-template-contrast.py \
+            tools/patch-native-v0212-template-core.py \
+            tools/patch-native-v0212-joystick-hold.py \
+            tools/patch-native-v0212-joystick-callback-thread.py \
+            tools/patch-native-v0212-joystick-prequeue-continuation.py \
+            tools/patch-native-v0212-movement-speed.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'CAPTURE_CALLBACK_TIMEOUT_MS' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'continuationQueue=prequeued-before-acquire-completion-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'getWindows()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
@@ -134,12 +151,14 @@ jobs:
           NAME="$OUT/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-${SHORT_SHA}.apk"
           cp "$APK" "$NAME"
           sha256sum "$NAME" | tee "$OUT/SHA256SUMS-v0212-phone-preview.txt"
-          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_model=%s\nstatus=%s\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_SHA" '34592946556' '8b71bcc72206a8ed7c9b1ffc71ba8d339a56e4d7' \
+          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\nscreen_physics_gate_run=%s\nscreen_physics_gate_commit=%s\nscreen_physics_attempts=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_model=%s\nandroid_serializer=%s\nstatus=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" '34607773001' '573edf135d7a961d40314a51fbc9f1c4fbbdfdb4' \
+            '34607773039' '573edf135d7a961d40314a51fbc9f1c4fbbdfdb4' '2/2 strict API35 screen-physics attempts passed unchanged verifier' \
             'nosyliam/revolution-macro v0.9c-hotfix3' \
             '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb' \
             'active-preset MoveSpeed -> recovered desktop effective-speed duration; explicit msPerStud override only' \
-            'PHONE PREVIEW ONLY - source-grounded MoveSpeed enabled; physical Roblox world-displacement and mobile buff-recognition validation pending' \
+            '35ms acquire + prequeued continued full-deflection segment; serialized jump taps at recovered offsets' \
+            'PHONE PREVIEW ONLY - full API35 macro E2E + repeated strict screen-physics green; physical Samsung/BSS world-displacement and mobile buff-recognition validation pending' \
             > "$OUT/BUILD_PROVENANCE-v0212-phone-preview.txt"
 
       - name: Upload phone preview APK
