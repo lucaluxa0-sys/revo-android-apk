@@ -15,8 +15,22 @@
     return Number.isFinite(n) ? n : fallback;
   }
 
+  function positiveNumber(v, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
   function localNumber(key, fallback) {
-    try { return number(localStorage.getItem(key), fallback); } catch (_) { return fallback; }
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw === null || raw === '') return fallback;
+      return number(raw, fallback);
+    } catch (_) { return fallback; }
+  }
+
+  function localPositiveNumber(key) {
+    const n = localNumber(key, 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
   function selectedGatherEntry() {
@@ -37,6 +51,8 @@
     const c = entry.object.Object('config');
     const patternName = String(c.Concrete('gatherPattern') || '');
     const macro = preset.Object('macro');
+    const player = preset.Object('player');
+    const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);
     return {
       routine: 'gather',
       account: String(account || 'Default'),
@@ -47,9 +63,12 @@
       repetitions: number(c.Concrete('repetitions'), 0),
       alignment: number(c.Concrete('alignment'), 0),
       keyDelayMs: number(macro.Concrete('keyDelay'), 50),
-      // Desktop Lua geometry is exact. These mobile timing/joystick values are
-      // intentionally exposed because physical Roblox calibration is still pending.
-      msPerStud: localNumber('revo.android.msPerStud', 62.5),
+      // Desktop v0.9c computes duration from distance / effective MoveSpeed.
+      // Read the active preset exactly; 24 is the backend PlayerSettings schema default.
+      baseMoveSpeed,
+      // A positive value is an explicit CI/physical-calibration override only.
+      // Production leaves this at zero and uses desktop-effective-speed timing.
+      msPerStud: localPositiveNumber('revo.android.msPerStud'),
       joystickCenterX: localNumber('revo.android.joystickCenterX', 0.16),
       joystickCenterY: localNumber('revo.android.joystickCenterY', 0.78),
       joystickRadius: localNumber('revo.android.joystickRadius', 0.085),
