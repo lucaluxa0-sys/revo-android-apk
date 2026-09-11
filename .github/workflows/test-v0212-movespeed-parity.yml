@@ -8,6 +8,10 @@ on:
       - '.github/workflows/test-v0212-movespeed-parity.yml'
       - 'tools/patch-native-v0212-movement-speed.py'
       - 'tools/patch-native-v0212-template-contrast.py'
+      - 'tools/patch-native-v0212-template-core.py'
+      - 'tools/patch-native-v0212-joystick-hold.py'
+      - 'tools/patch-native-v0212-joystick-callback-thread.py'
+      - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-hive-routing.py'
       - 'tools/patch-native-v0212-field-routing.py'
       - 'patches/android-backend-v0.2.9.js'
@@ -43,7 +47,11 @@ jobs:
           python3 tools/patch-native-v0212-template-contrast.py
           python3 -m py_compile \
             tools/patch-native-v0212-movement-speed.py \
-            tools/patch-native-v0212-template-contrast.py
+            tools/patch-native-v0212-template-contrast.py \
+            tools/patch-native-v0212-template-core.py \
+            tools/patch-native-v0212-joystick-hold.py \
+            tools/patch-native-v0212-joystick-callback-thread.py \
+            tools/patch-native-v0212-joystick-prequeue-continuation.py
           test -s revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
           grep -Fq 'desktop-effective-speed-v1' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -Fq 'formula-ported; mobile buff detector not yet validated' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
