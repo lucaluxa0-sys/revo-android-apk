@@ -1,0 +1,120 @@
+name: Recover full v0.9c buff metadata map
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-buff-full-table.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache full-buff-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+      - name: Install parsers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+      - name: Decode static and explicit initialization entries
+        shell: python
+        run: |
+          from pathlib import Path
+          import struct
+          import pefile
+          from capstone import Cs,CS_ARCH_X86,CS_MODE_64,CS_GRP_CALL
+          from capstone.x86 import X86_OP_IMM,X86_OP_MEM,X86_REG_RIP,X86_REG_RSP,X86_REG_RDX,X86_REG_RCX
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes();pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase);size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[dict(raw=int(s.PointerToRawData),size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),data=s.get_data()) for s in pe.sections]
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
+              return None
+          def qva(va):
+              o=va2off(va)
+              if o is None or o+8>len(raw):raise ValueError(hex(va))
+              return struct.unpack_from('<Q',raw,o)[0]
+          def s_at(p,n):
+              o=va2off(p)
+              if o is None or not(0<=n<=500):return '<invalid>'
+              try:return raw[o:o+n].decode('utf-8')
+              except:return '<decode-error>'
+
+          KEY_BASE=0x1425fc660; META_BASE=0x142643c98; STRIDE=136; COUNT=32
+          rows=[]
+          for i in range(COUNT):
+              k=qva(KEY_BASE+i*8);m=META_BASE+i*STRIDE
+              rows.append((k,s_at(qva(m),qva(m+8)),'static'))
+
+          INIT=0x140c17bc0;END=0x140c18ec0
+          def code_range(a,e):
+              for s in sections:
+                  sv=base+s['rva'];ev=sv+len(s['data'])
+                  if sv<=a<ev:return s['data'][a-sv:min(len(s['data']),e-sv)]
+              return b''
+          md=Cs(CS_ARCH_X86,CS_MODE_64);md.detail=True
+          ins=list(md.disasm(code_range(INIT,END),INIT))
+
+          # After the static loop ends at 0x140c17d3d, each remaining literal
+          # map entry is assembled in stack metadata at +0x20/+0x28 and then
+          # mapassigned using a RIP-relative key object in RCX.
+          for idx,x in enumerate(ins):
+              if x.address < 0x140c17d3d or not x.group(CS_GRP_CALL):continue
+              target=None
+              for op in x.operands:
+                  if op.type==X86_OP_IMM:target=int(op.imm)&((1<<64)-1)
+              if target!=0x14000bba0:continue  # exact runtime.mapassign in this build
+              keyptr=None;nameptr=None;namelen=None
+              for y in reversed(ins[max(0,idx-45):idx]):
+                  # Closest RIP-relative LEA into RCX is the literal key pointer.
+                  if keyptr is None and y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RCX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
+                      keyptr=y.address+y.size+y.operands[1].mem.disp
+                  # Metadata name pointer: LEA RDX,rip followed shortly by store RDX -> [RSP+0x20].
+                  if nameptr is None and y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RDX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
+                      candidate=y.address+y.size+y.operands[1].mem.disp
+                      # Only accept if a later instruction before the call stores RDX into rsp+0x20.
+                      yi=ins.index(y)
+                      for z in ins[yi+1:idx]:
+                          if z.mnemonic=='mov' and len(z.operands)>=2 and z.operands[0].type==X86_OP_MEM and z.operands[0].mem.base==X86_REG_RSP and z.operands[0].mem.disp==0x20 and z.operands[1].type==1 and z.operands[1].reg==X86_REG_RDX:
+                              nameptr=candidate;break
+                  if namelen is None and y.mnemonic=='mov' and len(y.operands)>=2 and y.operands[0].type==X86_OP_MEM and y.operands[0].mem.base==X86_REG_RSP and y.operands[0].mem.disp==0x28 and y.operands[1].type==X86_OP_IMM:
+                      namelen=int(y.operands[1].imm)
+                  if keyptr is not None and nameptr is not None and namelen is not None:break
+              if keyptr is None or nameptr is None or namelen is None:
+                  raise SystemExit(f'failed to decode explicit map entry at {x.address:#x}')
+              rows.append((qva(keyptr),s_at(nameptr,namelen),f'explicit@{x.address:#x}'))
+
+          out=['PINNED_SHA256=0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb','']
+          for k,n,src in rows:out.append(f'{k:2d} {n!r} {src}')
+          out.append('')
+          out.append(f'total={len(rows)} unique={len({k for k,_,_ in rows})}')
+          by={k:n for k,n,_ in rows}
+          out.append('===== MOVEMENT ENUM =====')
+          for k in (0,1,2,3,4,5,6,7,9,10,11,12):out.append(f'{k}={by.get(k,"<missing>")}')
+          Path('full-buff-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out))
+
+          if len(rows)!=49 or len({k for k,_,_ in rows})!=49:
+              raise SystemExit('expected exact 49-entry unique buff metadata map')
+          missing=[k for k in (0,1,2,3,4,5,6,7,9,10,11,12) if k not in by]
+          if missing:raise SystemExit(f'movement enum ids missing: {missing}')
+      - name: Upload full buff evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-buff-full-table
+          path: full-buff-evidence/
+          if-no-files-found: error
