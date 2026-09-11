@@ -40,33 +40,89 @@ missing = [item for item in required if item not in text]
 if missing:
     raise SystemExit('missing runtime evidence: ' + repr(missing))
 
-# Full-deflection parity gate: the decoded cannon launch requests a 6050 ms
-# direction hold. Require Android to accept and complete that continued
-# endpoint stroke, not merely dispatch the initial center->edge acquisition.
-continuation_6050 = [
-    line for line in text.splitlines()
-    if 'RevoJoystickHold' in line
-    and 'continuationAccepted=true' in line
-    and 'holdMs=6050' in line
-]
-completed_6050 = [
-    line for line in text.splitlines()
-    if 'RevoJoystickHold' in line
-    and 'holdCompleted=true' in line
-    and 'holdMs=6050' in line
-]
-if not continuation_6050:
-    raise SystemExit('no accepted full-deflection 6050ms joystick continuation')
-if not completed_6050:
-    raise SystemExit('no completed full-deflection 6050ms joystick hold')
+lines = text.splitlines()
 
-cancelled = [
-    line for line in text.splitlines()
+# Android Accessibility cannot safely inject an intermittent second pointer into
+# an already-continued joystick stream: API 35 cancelled that mixed continuation
+# in the real runtime. The mobile adapter therefore preserves the recovered
+# desktop movement offsets in full-deflection-distance time: move to each jump
+# offset, release, tap, reacquire full deflection, and continue. This gate proves
+# that the complete requested movement duration and every recovered jump offset
+# actually completed; merely dispatching the first segment is not sufficient.
+def has_hold_line(hold_ms, *needles):
+    return any(
+        'RevoJoystickHold' in line
+        and f'holdMs={hold_ms}' in line
+        and all(needle in line for needle in needles)
+        for line in lines
+    )
+
+
+def has_logical_hold_line(hold_ms, *needles):
+    return any(
+        'RevoJoystickHold' in line
+        and f'logicalHoldMs={hold_ms}' in line
+        and all(needle in line for needle in needles)
+        for line in lines
+    )
+
+
+# GotoCannon: Right is held for 1650 ms with Space at movement offsets 0 and 1300.
+if not has_hold_line(1650, 'sequenceStarted=true', 'tapCount=2'):
+    raise SystemExit('no serialized 1650ms GotoCannon joystick sequence start')
+if not has_hold_line(1650, 'sequenceCompleted=true', 'fullDeflectionMs=1650', 'tapCount=2'):
+    raise SystemExit('no completed 1650ms GotoCannon full-deflection sequence')
+for tap_index, offset in enumerate((0, 1300)):
+    if not has_logical_hold_line(
+            1650, 'tapCompleted=true', f'tapIndex={tap_index}', f'offsetMs={offset}'):
+        raise SystemExit(f'GotoCannon jump tap {tap_index} at movement offset {offset}ms did not complete')
+for segment_index, (segment_ms, movement_done_ms) in enumerate(((1300, 1300), (350, 1650))):
+    if not has_logical_hold_line(
+            1650, 'segmentCompleted=true', f'segmentIndex={segment_index}',
+            f'segmentMs={segment_ms}', f'movementDoneMs={movement_done_ms}'):
+        raise SystemExit(
+            f'GotoCannon full-deflection segment {segment_index} '
+            f'({segment_ms}ms -> {movement_done_ms}ms) did not complete')
+
+# Decoded cannon.pinetree-br: Forward+Left full deflection totals exactly 6050 ms,
+# with Space at movement offsets 0, 850 and 5670 ms. Segments are therefore
+# 850 + 4820 + 380 = 6050 ms; require every one plus all three jump taps.
+if not has_hold_line(6050, 'sequenceStarted=true', 'tapCount=3'):
+    raise SystemExit('no serialized 6050ms cannon-to-Pine joystick sequence start')
+if not has_hold_line(6050, 'sequenceCompleted=true', 'fullDeflectionMs=6050', 'tapCount=3'):
+    raise SystemExit('no completed 6050ms cannon-to-Pine full-deflection sequence')
+for tap_index, offset in enumerate((0, 850, 5670)):
+    if not has_logical_hold_line(
+            6050, 'tapCompleted=true', f'tapIndex={tap_index}', f'offsetMs={offset}'):
+        raise SystemExit(f'cannon-to-Pine jump tap {tap_index} at movement offset {offset}ms did not complete')
+for segment_index, (segment_ms, movement_done_ms) in enumerate(
+        ((850, 850), (4820, 5670), (380, 6050))):
+    if not has_logical_hold_line(
+            6050, 'segmentCompleted=true', f'segmentIndex={segment_index}',
+            f'segmentMs={segment_ms}', f'movementDoneMs={movement_done_ms}'):
+        raise SystemExit(
+            f'cannon-to-Pine full-deflection segment {segment_index} '
+            f'({segment_ms}ms -> {movement_done_ms}ms) did not complete')
+
+# Fail closed on any Accessibility cancellation/rejection. This is intentionally
+# broader than the old verifier because a segmented movement must prove every
+# acquire, continuation and tap dispatch, not only the aggregate completion log.
+failed_joystick = [
+    line for line in lines
     if 'RevoJoystickHold' in line
-    and ('acquireCancelled=true' in line or 'holdCancelled=true' in line)
+    and any(marker in line for marker in (
+        'sequenceFailed=true',
+        'busyRejected=true',
+        'acquireCancelled=true',
+        'holdCancelled=true',
+        'tapCancelled=true',
+        'acquireDispatchRejected=true',
+        'continuationAccepted=false',
+        'tapAccepted=false',
+    ))
 ]
-if cancelled:
-    raise SystemExit('joystick continuation cancellation observed: ' + repr(cancelled[:8]))
+if failed_joystick:
+    raise SystemExit('joystick serialized full-deflection failure observed: ' + repr(failed_joystick[:8]))
 
 # Enforce the real causal order rather than accepting the same markers out of sequence.
 ordered = [
@@ -88,14 +144,14 @@ for item in ordered:
     pos = next_pos
 
 confirmed_evidence = [
-    line for line in text.splitlines()
+    line for line in lines
     if 'RevoMovementEvidence' in line and 'confirmed=true' in line
 ]
 if not confirmed_evidence:
     raise SystemExit('no confirmed Roblox world-view movement sample after Gather action')
 
 states = []
-for line in text.splitlines():
+for line in lines:
     if 'RevoElolState' not in line:
         continue
     match = re.search(r'RevoElolState(?:\([^)]*\))?:\s*(\{.*\})\s*$', line)
@@ -133,4 +189,4 @@ assert (state.get('visualMovementConfirmedSamples') or 0) >= 1, state
 assert state.get('activePackage') == 'com.roblox.client', state
 assert not (state.get('routineLastError') or ''), state
 
-print('PASS: real Start -> Bee Swarm -> ClaimHive -> GotoCannon -> decoded Pine Tree route -> full-deflection Android hold -> e_lol with confirmed world-view movement')
+print('PASS: real Start -> Bee Swarm -> ClaimHive -> GotoCannon -> decoded Pine Tree route -> serialized full-deflection Android movement+jumps -> e_lol with confirmed world-view movement')
