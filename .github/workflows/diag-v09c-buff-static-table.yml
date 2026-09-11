@@ -47,9 +47,6 @@ jobs:
               o=va2off(va)
               if o is None or o+8>len(raw):raise ValueError(hex(va))
               return struct.unpack_from('<Q',raw,o)[0]
-          def u32va(va):
-              o=va2off(va)
-              return struct.unpack_from('<I',raw,o)[0]
           def string_at(ptr,n):
               o=va2off(ptr)
               if o is None or n<0 or n>500:return '<invalid>'
@@ -72,7 +69,6 @@ jobs:
               m=META_BASE+i*STRIDE
               sp=qva(m); sl=qva(m+8)
               name=string_at(sp,sl)
-              # Additional likely string pairs are printed as corroborating metadata.
               extra=[]
               for off in range(16,STRIDE-8,8):
                   p=qva(m+off); n=qva(m+off+8)
@@ -82,19 +78,25 @@ jobs:
                           extra.append(f'+{off:#x}={s!r}')
               rows.append((key,name,extra))
               out.append(f'index={i:02d} key={key:2d} name={name!r}' + ((' extras='+';'.join(extra)) if extra else ''))
+
           keys=[r[0] for r in rows]
-          if len(set(keys))!=COUNT:
-              raise SystemExit('static key table is not 32 unique BuffType values')
-          required={0,1,2,3,4,5,6,7,9,10,11,12}
-          missing=required-set(keys)
-          if missing:
-              raise SystemExit(f'movement BuffType ids missing from static table: {sorted(missing)}')
-          out.append('')
-          out.append('===== MOVEMENT IDS =====')
+          table_movement={2,3,4,5,6,7,9,10,11,12}
           by={k:(n,e) for k,n,e in rows}
-          for k in sorted(required):out.append(f'{k}={by[k][0]}')
+          out.append('')
+          out.append('===== TABLE-BACKED MOVEMENT IDS =====')
+          for k in sorted(table_movement):out.append(f'{k}={by.get(k,("<missing>",[]))[0]}')
+          out.append(f'contains_id0={0 in keys}')
+          out.append(f'contains_id1={1 in keys}')
           Path('buff-table-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
           print('\n'.join(out))
+
+          if len(set(keys))!=COUNT:
+              raise SystemExit('static key table is not 32 unique BuffType values')
+          missing=table_movement-set(keys)
+          if missing:
+              raise SystemExit(f'table-backed movement BuffType ids missing: {sorted(missing)}')
+          if 0 in keys or 1 in keys:
+              raise SystemExit('specialized Haste ids unexpectedly appeared in static metadata table')
       - name: Upload buff table evidence
         uses: actions/upload-artifact@v4
         with:
