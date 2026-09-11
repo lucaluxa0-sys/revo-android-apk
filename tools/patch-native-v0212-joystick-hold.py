@@ -112,39 +112,36 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
         return joystickHoldInFlight.get();
     }
 
-    /**
-     * Android equivalent of a desktop direction-key hold.
-     *
-     * Accessibility StrokeDescription duration is traversal time, so using one
-     * center->edge path for the requested hold duration only ramps joystick
-     * strength for the whole command. Acquire full deflection quickly, keep the
-     * pointer down, then continue it with a zero-motion stroke at the endpoint.
-     *
-     * Gesture callbacks share the Accessibility service thread with screenshot
-     * processing. Under load, a completed acquisition callback can arrive later
-     * than its nominal duration. Keep one logical joystick command in flight until
-     * its continuation actually completes so a later macro step cannot cancel it.
-     * The router/gather adapters explicitly defer while this flag is true.
-     */
-    private boolean joystickHoldWithTaps(int displayId, float centerX, float centerY,
-                                         float targetX, float targetY, long holdMs,
-                                         float tapX, float tapY, long tapDurationMs,
-                                         long[] tapOffsetsMs) {
-        final long safeHold = Math.max(50L, holdMs);
-        final long acquireMs = Math.max(1L, Math.min(JOYSTICK_ACQUIRE_MS, safeHold));
-        final long safeTap = Math.max(1L, tapDurationMs);
-        if (tapOffsetsMs != null) {
-            for (long offset : tapOffsetsMs) {
-                if (offset < 0 || offset + safeTap > safeHold) return false;
-            }
-        }
-        if (!joystickHoldInFlight.compareAndSet(false, true)) {
-            android.util.Log.w("RevoJoystickHold",
-                    "busyRejected=true display=" + displayId
-                            + " acquireMs=" + acquireMs
-                            + " holdMs=" + safeHold);
-            return false;
-        }
+    private void failJoystickSequence(String reason, int displayId, long logicalHoldMs,
+                                      long fullDeflectionMs, int tapCount) {
+        joystickHoldInFlight.set(false);
+        android.util.Log.e("RevoJoystickHold",
+                "sequenceFailed=true reason=" + reason
+                        + " display=" + displayId
+                        + " holdMs=" + logicalHoldMs
+                        + " fullDeflectionMs=" + fullDeflectionMs
+                        + " tapCount=" + tapCount);
+    }
+
+    private void completeJoystickSequence(int displayId, long logicalHoldMs,
+                                          long fullDeflectionMs, int tapCount) {
+        joystickHoldInFlight.set(false);
+        android.util.Log.i("RevoJoystickHold",
+                "holdCompleted=true sequenceCompleted=true display=" + displayId
+                        + " holdMs=" + logicalHoldMs
+                        + " fullDeflectionMs=" + fullDeflectionMs
+                        + " tapCount=" + tapCount);
+    }
+
+    /** Dispatch one full-deflection movement segment with no competing second pointer. */
+    private boolean dispatchJoystickSegment(int displayId, float centerX, float centerY,
+                                            float targetX, float targetY, long segmentMs,
+                                            long logicalHoldMs, long movementDoneBeforeMs,
+                                            int segmentIndex, int tapCount,
+                                            Runnable onDone) {
+        final long safeSegment = Math.max(1L, segmentMs);
+        final long acquireMs = Math.max(1L, Math.min(JOYSTICK_ACQUIRE_MS, safeSegment));
+        final long movementDoneAfterMs = movementDoneBeforeMs + safeSegment;
 
         Path acquirePath = new Path();
         acquirePath.moveTo(centerX, centerY);
@@ -162,58 +159,193 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
                         Path holdPath = new Path();
                         holdPath.moveTo(targetX, targetY);
                         GestureDescription.StrokeDescription heldStroke =
-                                acquireStroke.continueStroke(holdPath, 0, safeHold, false);
-                        GestureDescription.Builder hold = new GestureDescription.Builder()
+                                acquireStroke.continueStroke(holdPath, 0, safeSegment, false);
+                        GestureDescription holdGesture = new GestureDescription.Builder()
                                 .setDisplayId(displayId)
-                                .addStroke(heldStroke);
-                        if (tapOffsetsMs != null) {
-                            for (long offset : tapOffsetsMs) {
-                                Path tap = new Path();
-                                tap.moveTo(tapX, tapY);
-                                hold.addStroke(new GestureDescription.StrokeDescription(
-                                        tap, offset, safeTap));
-                            }
-                        }
-                        boolean accepted = dispatchGesture(hold.build(),
+                                .addStroke(heldStroke)
+                                .build();
+                        boolean accepted = dispatchGesture(holdGesture,
                                 new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
                                     @Override public void onCompleted(GestureDescription done) {
-                                        joystickHoldInFlight.set(false);
                                         android.util.Log.i("RevoJoystickHold",
-                                                "holdCompleted=true display=" + displayId
-                                                        + " acquireMs=" + acquireMs
-                                                        + " holdMs=" + safeHold);
+                                                "segmentCompleted=true display=" + displayId
+                                                        + " logicalHoldMs=" + logicalHoldMs
+                                                        + " segmentIndex=" + segmentIndex
+                                                        + " segmentMs=" + safeSegment
+                                                        + " movementDoneMs=" + movementDoneAfterMs);
+                                        onDone.run();
                                     }
                                     @Override public void onCancelled(GestureDescription cancelled) {
-                                        joystickHoldInFlight.set(false);
                                         android.util.Log.e("RevoJoystickHold",
                                                 "holdCancelled=true display=" + displayId
-                                                        + " acquireMs=" + acquireMs
-                                                        + " holdMs=" + safeHold);
+                                                        + " logicalHoldMs=" + logicalHoldMs
+                                                        + " segmentIndex=" + segmentIndex
+                                                        + " segmentMs=" + safeSegment);
+                                        failJoystickSequence("hold-cancelled", displayId,
+                                                logicalHoldMs, movementDoneBeforeMs, tapCount);
                                     }
                                 }, null);
-                        if (!accepted) joystickHoldInFlight.set(false);
                         android.util.Log.i("RevoJoystickHold",
                                 "continuationAccepted=" + accepted
                                         + " display=" + displayId
-                                        + " acquireMs=" + acquireMs
-                                        + " holdMs=" + safeHold);
+                                        + " logicalHoldMs=" + logicalHoldMs
+                                        + " segmentIndex=" + segmentIndex
+                                        + " segmentMs=" + safeSegment);
+                        if (!accepted) {
+                            failJoystickSequence("hold-dispatch-rejected", displayId,
+                                    logicalHoldMs, movementDoneBeforeMs, tapCount);
+                        }
                     }
                     @Override public void onCancelled(GestureDescription cancelled) {
-                        joystickHoldInFlight.set(false);
                         android.util.Log.e("RevoJoystickHold",
                                 "acquireCancelled=true display=" + displayId
-                                        + " acquireMs=" + acquireMs
-                                        + " holdMs=" + safeHold);
+                                        + " logicalHoldMs=" + logicalHoldMs
+                                        + " segmentIndex=" + segmentIndex
+                                        + " segmentMs=" + safeSegment);
+                        failJoystickSequence("acquire-cancelled", displayId,
+                                logicalHoldMs, movementDoneBeforeMs, tapCount);
                     }
                 }, null);
         if (!acquireAccepted) {
-            joystickHoldInFlight.set(false);
             android.util.Log.e("RevoJoystickHold",
                     "acquireDispatchRejected=true display=" + displayId
-                            + " acquireMs=" + acquireMs
-                            + " holdMs=" + safeHold);
+                            + " logicalHoldMs=" + logicalHoldMs
+                            + " segmentIndex=" + segmentIndex
+                            + " segmentMs=" + safeSegment);
+            failJoystickSequence("acquire-dispatch-rejected", displayId,
+                    logicalHoldMs, movementDoneBeforeMs, tapCount);
         }
         return acquireAccepted;
+    }
+
+    /** Dispatch one jump tap only after the previous joystick pointer is fully up. */
+    private boolean dispatchSerializedTap(int displayId, float tapX, float tapY,
+                                          long tapDurationMs, int tapIndex,
+                                          long offsetMs, long logicalHoldMs,
+                                          long movementDoneMs, int tapCount,
+                                          Runnable onDone) {
+        final long safeTap = Math.max(1L, tapDurationMs);
+        Path tap = new Path();
+        tap.moveTo(tapX, tapY);
+        GestureDescription tapGesture = new GestureDescription.Builder()
+                .setDisplayId(displayId)
+                .addStroke(new GestureDescription.StrokeDescription(tap, 0, safeTap))
+                .build();
+        boolean accepted = dispatchGesture(tapGesture,
+                new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
+                    @Override public void onCompleted(GestureDescription done) {
+                        android.util.Log.i("RevoJoystickHold",
+                                "tapCompleted=true display=" + displayId
+                                        + " logicalHoldMs=" + logicalHoldMs
+                                        + " tapIndex=" + tapIndex
+                                        + " offsetMs=" + offsetMs
+                                        + " movementDoneMs=" + movementDoneMs);
+                        onDone.run();
+                    }
+                    @Override public void onCancelled(GestureDescription cancelled) {
+                        android.util.Log.e("RevoJoystickHold",
+                                "tapCancelled=true display=" + displayId
+                                        + " logicalHoldMs=" + logicalHoldMs
+                                        + " tapIndex=" + tapIndex
+                                        + " offsetMs=" + offsetMs);
+                        failJoystickSequence("tap-cancelled", displayId,
+                                logicalHoldMs, movementDoneMs, tapCount);
+                    }
+                }, null);
+        android.util.Log.i("RevoJoystickHold",
+                "tapAccepted=" + accepted
+                        + " display=" + displayId
+                        + " logicalHoldMs=" + logicalHoldMs
+                        + " tapIndex=" + tapIndex
+                        + " offsetMs=" + offsetMs
+                        + " movementDoneMs=" + movementDoneMs);
+        if (!accepted) {
+            failJoystickSequence("tap-dispatch-rejected", displayId,
+                    logicalHoldMs, movementDoneMs, tapCount);
+        }
+        return accepted;
+    }
+
+    /**
+     * Continue a desktop movement/tap command without asking Android Accessibility
+     * to introduce a new pointer into a continued joystick gesture. API 35 cancels
+     * that mixed continuation at runtime. Instead, preserve the recovered desktop
+     * movement offsets in full-deflection-distance time: complete each movement
+     * segment, release, issue the jump tap, reacquire full deflection, and continue.
+     * The sum of full-deflection segments remains exactly logicalHoldMs.
+     */
+    private boolean runJoystickTapSequence(int displayId, float centerX, float centerY,
+                                           float targetX, float targetY, long logicalHoldMs,
+                                           float tapX, float tapY, long tapDurationMs,
+                                           long[] tapOffsetsMs, int tapIndex,
+                                           long movementDoneMs, int segmentIndex) {
+        final int tapCount = tapOffsetsMs == null ? 0 : tapOffsetsMs.length;
+        if (tapIndex < tapCount) {
+            final long offset = tapOffsetsMs[tapIndex];
+            final long segmentMs = offset - movementDoneMs;
+            if (segmentMs > 0) {
+                return dispatchJoystickSegment(
+                        displayId, centerX, centerY, targetX, targetY,
+                        segmentMs, logicalHoldMs, movementDoneMs, segmentIndex, tapCount,
+                        () -> runJoystickTapSequence(
+                                displayId, centerX, centerY, targetX, targetY,
+                                logicalHoldMs, tapX, tapY, tapDurationMs, tapOffsetsMs,
+                                tapIndex, offset, segmentIndex + 1));
+            }
+            return dispatchSerializedTap(
+                    displayId, tapX, tapY, tapDurationMs, tapIndex, offset,
+                    logicalHoldMs, movementDoneMs, tapCount,
+                    () -> runJoystickTapSequence(
+                            displayId, centerX, centerY, targetX, targetY,
+                            logicalHoldMs, tapX, tapY, tapDurationMs, tapOffsetsMs,
+                            tapIndex + 1, movementDoneMs, segmentIndex));
+        }
+
+        final long remainingMs = logicalHoldMs - movementDoneMs;
+        if (remainingMs <= 0) {
+            completeJoystickSequence(displayId, logicalHoldMs, movementDoneMs, tapCount);
+            return true;
+        }
+        return dispatchJoystickSegment(
+                displayId, centerX, centerY, targetX, targetY,
+                remainingMs, logicalHoldMs, movementDoneMs, segmentIndex, tapCount,
+                () -> completeJoystickSequence(
+                        displayId, logicalHoldMs, logicalHoldMs, tapCount));
+    }
+
+    /** Android equivalent of a desktop direction-key hold with optional jump taps. */
+    private boolean joystickHoldWithTaps(int displayId, float centerX, float centerY,
+                                         float targetX, float targetY, long holdMs,
+                                         float tapX, float tapY, long tapDurationMs,
+                                         long[] tapOffsetsMs) {
+        final long safeHold = Math.max(50L, holdMs);
+        final long safeTap = Math.max(1L, tapDurationMs);
+        long previous = -1L;
+        if (tapOffsetsMs != null) {
+            for (long offset : tapOffsetsMs) {
+                if (offset < 0 || offset < previous || offset + safeTap > safeHold) return false;
+                previous = offset;
+            }
+        }
+        if (!joystickHoldInFlight.compareAndSet(false, true)) {
+            android.util.Log.w("RevoJoystickHold",
+                    "busyRejected=true display=" + displayId + " holdMs=" + safeHold);
+            return false;
+        }
+        final int tapCount = tapOffsetsMs == null ? 0 : tapOffsetsMs.length;
+        android.util.Log.i("RevoJoystickHold",
+                "sequenceStarted=true display=" + displayId
+                        + " holdMs=" + safeHold
+                        + " tapCount=" + tapCount
+                        + " tapAdaptation=serialized-between-full-deflection-segments-v1");
+        boolean accepted = runJoystickTapSequence(
+                displayId, centerX, centerY, targetX, targetY, safeHold,
+                tapX, tapY, safeTap, tapOffsetsMs, 0, 0L, 0);
+        if (!accepted && joystickHoldInFlight.get()) {
+            failJoystickSequence("initial-dispatch-rejected", displayId,
+                    safeHold, 0L, tapCount);
+        }
+        return accepted;
     }
 
     public boolean joystick(int displayId, float centerX, float centerY,
@@ -251,8 +383,13 @@ required_service = (
     'JOYSTICK_ACQUIRE_MS = 35L',
     'joystickHoldInFlight',
     'joystickHoldWithTaps',
+    'runJoystickTapSequence',
+    'dispatchSerializedTap',
     'new GestureDescription.StrokeDescription(acquirePath, 0, acquireMs, true)',
-    'continueStroke(holdPath, 0, safeHold, false)',
+    'continueStroke(holdPath, 0, safeSegment, false)',
+    'tapAdaptation=serialized-between-full-deflection-segments-v1',
+    'sequenceCompleted=true',
+    'fullDeflectionMs=',
     'continuationAccepted=',
     'holdCompleted=true',
 )
@@ -262,8 +399,8 @@ if missing:
 if 'accessibility-joystick-hold-v2' not in router:
     raise SystemExit('router input-adaptation marker was not updated')
 if 'waiting:joystick-in-flight:' not in router:
-    raise SystemExit('router does not defer while a continued joystick is in flight')
+    raise SystemExit('router does not defer while a continued joystick sequence is in flight')
 if 'waiting:joystick-in-flight' not in gather:
-    raise SystemExit('gather does not defer while a continued joystick is in flight')
+    raise SystemExit('gather does not defer while a continued joystick sequence is in flight')
 
-print('Patched v0.2.12 Android joystick to serialize acquire/full-deflection holds')
+print('Patched v0.2.12 Android joystick to serialize jump taps between full-deflection segments')
