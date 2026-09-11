@@ -1,0 +1,103 @@
+name: Decode v0.9c buff metadata table
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-buff-static-table.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache buff-table-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+      - name: Install PE parser
+        run: python3 -m pip install --disable-pip-version-check pefile
+      - name: Decode exact static key and metadata arrays
+        shell: python
+        run: |
+          from pathlib import Path
+          import struct
+          import pefile
+
+          raw=Path('.cache/RevolutionMacro.exe').read_bytes()
+          pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          sections=[dict(raw=int(s.PointerToRawData),size=int(s.SizeOfRawData),rva=int(s.VirtualAddress)) for s in pe.sections]
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders):return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']:return s['raw']+rva-s['rva']
+              return None
+          def qva(va):
+              o=va2off(va)
+              if o is None or o+8>len(raw):raise ValueError(hex(va))
+              return struct.unpack_from('<Q',raw,o)[0]
+          def u32va(va):
+              o=va2off(va)
+              return struct.unpack_from('<I',raw,o)[0]
+          def string_at(ptr,n):
+              o=va2off(ptr)
+              if o is None or n<0 or n>500:return '<invalid>'
+              try:return raw[o:o+n].decode('utf-8')
+              except:return '<decode-error>'
+
+          # Proven directly by instructions in buff package init:
+          #   0x140c17c75 -> key table 0x1425fc660, one uint64 per entry
+          #   0x140c17c8b -> metadata table 0x142643c98, stride 136 bytes
+          #   loop bound 0x20.
+          KEY_BASE=0x1425fc660
+          META_BASE=0x142643c98
+          STRIDE=136
+          COUNT=32
+          out=['PINNED_SHA256=0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb',
+               f'KEY_BASE={KEY_BASE:#x}',f'META_BASE={META_BASE:#x}',f'STRIDE={STRIDE}',f'COUNT={COUNT}','']
+          rows=[]
+          for i in range(COUNT):
+              key=qva(KEY_BASE+i*8)
+              m=META_BASE+i*STRIDE
+              sp=qva(m); sl=qva(m+8)
+              name=string_at(sp,sl)
+              # Additional likely string pairs are printed as corroborating metadata.
+              extra=[]
+              for off in range(16,STRIDE-8,8):
+                  p=qva(m+off); n=qva(m+off+8)
+                  if base<=p<base+int(pe.OPTIONAL_HEADER.SizeOfImage) and 1<=n<=80:
+                      s=string_at(p,n)
+                      if s not in ('<invalid>','<decode-error>') and all(c.isprintable() for c in s):
+                          extra.append(f'+{off:#x}={s!r}')
+              rows.append((key,name,extra))
+              out.append(f'index={i:02d} key={key:2d} name={name!r}' + ((' extras='+';'.join(extra)) if extra else ''))
+          keys=[r[0] for r in rows]
+          if len(set(keys))!=COUNT:
+              raise SystemExit('static key table is not 32 unique BuffType values')
+          required={0,1,2,3,4,5,6,7,9,10,11,12}
+          missing=required-set(keys)
+          if missing:
+              raise SystemExit(f'movement BuffType ids missing from static table: {sorted(missing)}')
+          out.append('')
+          out.append('===== MOVEMENT IDS =====')
+          by={k:(n,e) for k,n,e in rows}
+          for k in sorted(required):out.append(f'{k}={by[k][0]}')
+          Path('buff-table-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out))
+      - name: Upload buff table evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-buff-static-table
+          path: buff-table-evidence/
+          if-no-files-found: error
