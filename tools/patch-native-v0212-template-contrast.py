@@ -30,6 +30,8 @@ old = r'''    private static Match match(int[] frame, int fw, int fh, Template t
 new = r'''    private static Match match(int[] frame, int fw, int fh, Template t, int variation) {
         int first = t.opaqueIndexes[0], fx = first % t.width, fy = first / t.width, expected = t.pixels[first];
         int maxX = fw - t.width, maxY = fh - t.height;
+        Match best = null;
+        long bestError = Long.MAX_VALUE;
         for (int y = 0; y <= maxY; y++) {
             int row = (y + fy) * fw;
             for (int x = 0; x <= maxX; x++) {
@@ -43,15 +45,33 @@ new = r'''    private static Match match(int[] frame, int fw, int fh, Template t
                 // and variation tolerance intact while rejecting featureless candidates.
                 if (!maskedBackgroundHasContrast(frame, fw, x, y, t, expected, variation)) continue;
 
+                // Do not let the first raster-order candidate win merely because every opaque
+                // pixel is inside Revolution's variation tolerance. The full v0.2.12 gate
+                // demonstrated a tolerated bright system glyph winning before the genuine
+                // recovered claimhive bitmap. Rank tolerated candidates by total opaque RGB
+                // error and prefer the highest-fidelity one. An exact recovered bitmap has
+                // zero error, so it can be returned immediately without scanning the rest of
+                // the frame. No screen coordinates or route-specific geometry are assumed.
                 boolean ok = true;
+                long error = 0;
                 for (int idx : t.opaqueIndexes) {
                     int tx = idx % t.width, ty = idx / t.width;
-                    if (!rgbClose(frame[(y + ty) * fw + x + tx], t.pixels[idx], variation)) { ok = false; break; }
+                    int actual = frame[(y + ty) * fw + x + tx];
+                    int target = t.pixels[idx];
+                    int dr = Math.abs(((actual >> 16) & 255) - ((target >> 16) & 255));
+                    int dg = Math.abs(((actual >> 8) & 255) - ((target >> 8) & 255));
+                    int db = Math.abs((actual & 255) - (target & 255));
+                    if (dr > variation || dg > variation || db > variation) { ok = false; break; }
+                    error += dr + dg + db;
+                    if (error >= bestError) { ok = false; break; }
                 }
-                if (ok) return new Match(t.name, x, y, t.width, t.height);
+                if (!ok) continue;
+                best = new Match(t.name, x, y, t.width, t.height);
+                bestError = error;
+                if (bestError == 0) return best;
             }
         }
-        return null;
+        return best;
     }
 
     private static boolean maskedBackgroundHasContrast(int[] frame, int fw, int x, int y,
@@ -90,7 +110,7 @@ if text.count(old) != 1:
 text = text.replace(old, new, 1)
 ROUTER.write_text(text, encoding='utf-8')
 
-if 'maskedBackgroundHasContrast' not in text:
-    raise SystemExit('template contrast guard was not installed')
+if 'maskedBackgroundHasContrast' not in text or 'bestError' not in text:
+    raise SystemExit('template contrast/fidelity matcher was not installed')
 
-print('Patched v0.2.12 template matcher to reject uniform alpha-mask false positives')
+print('Patched v0.2.12 template matcher to reject uniform masks and prefer highest-fidelity candidates')
