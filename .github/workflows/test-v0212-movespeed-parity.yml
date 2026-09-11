@@ -1,0 +1,125 @@
+name: Verify Revo Android v0.2.12 desktop MoveSpeed parity
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0212-movespeed-parity.yml'
+      - 'tools/patch-native-v0212-movement-speed.py'
+      - 'tools/patch-native-v0212-template-contrast.py'
+      - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-field-routing.py'
+      - 'patches/android-backend-v0.2.9.js'
+      - 'third_party/revolution-2025-gpl/pkg/config/settings.go'
+      - '.github/workflows/diag-v09c-movespeed-formula.yml'
+      - '.ci/source.part00'
+      - '.ci/source.part01'
+      - '.ci/source.part02'
+      - '.ci/source.part03'
+
+permissions:
+  contents: read
+
+jobs:
+  movespeed-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct source and apply production v0.2.12 timing pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
+          unzip -q /tmp/source.zip
+          python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-field-routing.py
+          python3 tools/patch-native-v0212-template-contrast.py
+          python3 -m py_compile \
+            tools/patch-native-v0212-movement-speed.py \
+            tools/patch-native-v0212-template-contrast.py
+          test -s revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
+          grep -Fq 'desktop-effective-speed-v1' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -Fq 'formula-ported; mobile buff detector not yet validated' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+
+      - name: Prove recovered v0.9c effective-speed formula and timing behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=revo-android/app/src/main/java
+          TEST=/tmp/revo-speed-test
+          OUT=/tmp/revo-speed-classes
+          mkdir -p "$TEST/com/revolution/android" "$OUT"
+          cp "$SRC/com/revolution/android/RevoMovementSpeed.java" "$TEST/com/revolution/android/"
+          cat > "$TEST/com/revolution/android/RevoMovementSpeedTest.java" <<'EOF'
+          package com.revolution.android;
+
+          public final class RevoMovementSpeedTest {
+              private static void close(String name, double got, double want) {
+                  if (Math.abs(got - want) > 1e-9) {
+                      throw new AssertionError(name + ": got=" + got + " want=" + want);
+                  }
+              }
+              private static void exact(String name, long got, long want) {
+                  if (got != want) {
+                      throw new AssertionError(name + ": got=" + got + " want=" + want);
+                  }
+              }
+              public static void main(String[] args) {
+                  close("base24", RevoMovementSpeed.effectiveSpeed(24, 0, false, false, false, false, false), 24.0);
+                  close("bear+4", RevoMovementSpeed.effectiveSpeed(24, 0, false, false, true, false, false), 28.0);
+                  close("coconut+10", RevoMovementSpeed.effectiveSpeed(24, 0, false, true, false, false, false), 34.0);
+                  close("haste5", RevoMovementSpeed.effectiveSpeed(24, 5, false, false, false, false, false), 36.0);
+                  close("hasteClamp10", RevoMovementSpeed.effectiveSpeed(24, 99, false, false, false, false, false), 48.0);
+                  close("hastePlus", RevoMovementSpeed.effectiveSpeed(24, 0, true, false, false, false, false), 48.0);
+                  close("oil", RevoMovementSpeed.effectiveSpeed(24, 0, false, false, false, true, false), 28.8);
+                  close("smoothie", RevoMovementSpeed.effectiveSpeed(24, 0, false, false, false, false, true), 30.0);
+                  close("combined", RevoMovementSpeed.effectiveSpeed(24, 10, true, true, true, true, true), 228.0);
+
+                  exact("desktop16_20stud", RevoMovementSpeed.durationMs(
+                          20, 16, 0, 0, false, false, false, false, false, 10_000), 1250);
+                  exact("desktop24_24stud", RevoMovementSpeed.durationMs(
+                          24, 24, 0, 0, false, false, false, false, false, 10_000), 1000);
+                  exact("explicit12override", RevoMovementSpeed.durationMs(
+                          20, 24, 12, 10, true, true, true, true, true, 10_000), 240);
+                  exact("minimumGestureClamp", RevoMovementSpeed.durationMs(
+                          0.01, 24, 0, 0, false, false, false, false, false, 10_000), 50);
+                  exact("maximumGestureClamp", RevoMovementSpeed.durationMs(
+                          1000, 24, 0, 0, false, false, false, false, false, 10_000), 10_000);
+
+                  System.out.println("PASS: v0.9c MoveSpeed formula + duration provider + explicit CI override");
+              }
+          }
+          EOF
+          javac -d "$OUT" \
+            "$TEST/com/revolution/android/RevoMovementSpeed.java" \
+            "$TEST/com/revolution/android/RevoMovementSpeedTest.java"
+          java -cp "$OUT" com.revolution.android.RevoMovementSpeedTest
+
+      - name: Verify Android frontend uses active preset MoveSpeed
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check patches/android-backend-v0.2.9.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('patches/android-backend-v0.2.9.js').read_text()
+          required = [
+              "preset.Object('player')",
+              "player.Concrete('moveSpeed')",
+              "positiveNumber(player.Concrete('moveSpeed'), 24)",
+              "msPerStud: localPositiveNumber('revo.android.msPerStud')",
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+              raise SystemExit('missing frontend MoveSpeed bridge evidence: ' + repr(missing))
+          if "localNumber('revo.android.msPerStud', 62.5)" in s:
+              raise SystemExit('production frontend still forces legacy fixed 62.5ms/stud')
+          print('PASS: active preset MoveSpeed is production authority; fixed ms/stud is explicit override only')
+          PY
