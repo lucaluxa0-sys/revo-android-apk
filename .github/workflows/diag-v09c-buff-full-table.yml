@@ -33,7 +33,7 @@ jobs:
           import struct
           import pefile
           from capstone import Cs,CS_ARCH_X86,CS_MODE_64,CS_GRP_CALL
-          from capstone.x86 import X86_OP_IMM,X86_OP_MEM,X86_REG_RIP,X86_REG_RSP,X86_REG_RDX,X86_REG_RCX
+          from capstone.x86 import X86_OP_IMM,X86_OP_MEM,X86_REG_RIP,X86_REG_RSP,X86_REG_RDX,X86_REG_RCX,X86_REG_RSI
 
           raw=Path('.cache/RevolutionMacro.exe').read_bytes();pe=pefile.PE('.cache/RevolutionMacro.exe',fast_load=False)
           base=int(pe.OPTIONAL_HEADER.ImageBase);size=int(pe.OPTIONAL_HEADER.SizeOfImage)
@@ -69,38 +69,72 @@ jobs:
           md=Cs(CS_ARCH_X86,CS_MODE_64);md.detail=True
           ins=list(md.disasm(code_range(INIT,END),INIT))
 
-          # After the static loop ends at 0x140c17d3d, each remaining literal
-          # map entry is assembled in stack metadata at +0x20/+0x28 and then
-          # mapassigned using a RIP-relative key object in RCX.
+          # After the 32-entry static loop, Go emits 17 literal map entries in
+          # two observed forms:
+          #   1) build metadata on the stack and write Name ptr/len directly;
+          #   2) copy a full 136-byte metadata literal from RSI to the stack,
+          #      then override selected fields before mapassign.
+          # Decode each mapassign only from instructions since the previous
+          # mapassign, so state from one literal cannot bleed into the next.
+          previous = next(i for i,x in enumerate(ins) if x.address >= 0x140c17d3d)
+          explicit_count=0
           for idx,x in enumerate(ins):
-              if x.address < 0x140c17d3d or not x.group(CS_GRP_CALL):continue
+              if idx < previous or not x.group(CS_GRP_CALL):continue
               target=None
               for op in x.operands:
                   if op.type==X86_OP_IMM:target=int(op.imm)&((1<<64)-1)
-              if target!=0x14000bba0:continue  # exact runtime.mapassign in this build
-              keyptr=None;nameptr=None;namelen=None
-              for y in reversed(ins[max(0,idx-45):idx]):
-                  # Closest RIP-relative LEA into RCX is the literal key pointer.
-                  if keyptr is None and y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RCX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
+              if target!=0x14000bba0:continue
+              segment=ins[previous:idx]
+              keyptr=None
+              direct_nameptr=None;direct_namelen=None
+              copied_meta=None
+
+              # The last RIP-relative LEA into RCX in this segment is the key
+              # object passed to runtime.mapassign.
+              for y in segment:
+                  if y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RCX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
                       keyptr=y.address+y.size+y.operands[1].mem.disp
-                  # Metadata name pointer: LEA RDX,rip followed shortly by store RDX -> [RSP+0x20].
-                  if nameptr is None and y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RDX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
-                      candidate=y.address+y.size+y.operands[1].mem.disp
-                      # Only accept if a later instruction before the call stores RDX into rsp+0x20.
-                      yi=ins.index(y)
-                      for z in ins[yi+1:idx]:
-                          if z.mnemonic=='mov' and len(z.operands)>=2 and z.operands[0].type==X86_OP_MEM and z.operands[0].mem.base==X86_REG_RSP and z.operands[0].mem.disp==0x20 and z.operands[1].type==1 and z.operands[1].reg==X86_REG_RDX:
-                              nameptr=candidate;break
-                  if namelen is None and y.mnemonic=='mov' and len(y.operands)>=2 and y.operands[0].type==X86_OP_MEM and y.operands[0].mem.base==X86_REG_RSP and y.operands[0].mem.disp==0x28 and y.operands[1].type==X86_OP_IMM:
-                      namelen=int(y.operands[1].imm)
-                  if keyptr is not None and nameptr is not None and namelen is not None:break
-              if keyptr is None or nameptr is None or namelen is None:
-                  raise SystemExit(f'failed to decode explicit map entry at {x.address:#x}')
-              rows.append((qva(keyptr),s_at(nameptr,namelen),f'explicit@{x.address:#x}'))
+
+              # Track direct stack Name construction. RDX may be reused later,
+              # so bind the RIP value specifically when it is stored at +0x20.
+              last_rdx_rip=None
+              for y in segment:
+                  if y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RDX and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
+                      last_rdx_rip=y.address+y.size+y.operands[1].mem.disp
+                  elif y.mnemonic=='mov' and len(y.operands)>=2 and y.operands[0].type==X86_OP_MEM and y.operands[0].mem.base==X86_REG_RSP and y.operands[0].mem.disp==0x20 and y.operands[1].type==1 and y.operands[1].reg==X86_REG_RDX and last_rdx_rip is not None:
+                      direct_nameptr=last_rdx_rip
+                  elif y.mnemonic=='mov' and len(y.operands)>=2 and y.operands[0].type==X86_OP_MEM and y.operands[0].mem.base==X86_REG_RSP and y.operands[0].mem.disp==0x28 and y.operands[1].type==X86_OP_IMM:
+                      direct_namelen=int(y.operands[1].imm)
+
+              # Track copied metadata literals. A RIP-relative RSI source
+              # followed by MOVUPS [RSI...] -> [RDX...] is a full metadata
+              # object copy; its first two qwords are Name ptr/len.
+              last_rsi_rip=None
+              copied=False
+              for y in segment:
+                  if y.mnemonic=='lea' and len(y.operands)>=2 and y.operands[0].type==1 and y.operands[0].reg==X86_REG_RSI and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RIP:
+                      last_rsi_rip=y.address+y.size+y.operands[1].mem.disp
+                      copied=False
+                  elif last_rsi_rip is not None and y.mnemonic=='movups' and len(y.operands)>=2 and y.operands[1].type==X86_OP_MEM and y.operands[1].mem.base==X86_REG_RSI:
+                      copied=True
+                      copied_meta=last_rsi_rip
+
+              if keyptr is None:
+                  raise SystemExit(f'failed to decode explicit key at {x.address:#x}')
+              if direct_nameptr is not None and direct_namelen is not None:
+                  name=s_at(direct_nameptr,direct_namelen); form='direct'
+              elif copied_meta is not None:
+                  name=s_at(qva(copied_meta),qva(copied_meta+8)); form='copied'
+              else:
+                  raise SystemExit(f'failed to decode explicit metadata at {x.address:#x}')
+              rows.append((qva(keyptr),name,f'explicit-{form}@{x.address:#x}'))
+              explicit_count+=1
+              previous=idx+1
 
           out=['PINNED_SHA256=0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb','']
           for k,n,src in rows:out.append(f'{k:2d} {n!r} {src}')
           out.append('')
+          out.append(f'explicit_count={explicit_count}')
           out.append(f'total={len(rows)} unique={len({k for k,_,_ in rows})}')
           by={k:n for k,n,_ in rows}
           out.append('===== MOVEMENT ENUM =====')
@@ -108,6 +142,8 @@ jobs:
           Path('full-buff-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
           print('\n'.join(out))
 
+          if explicit_count!=17:
+              raise SystemExit(f'expected 17 explicit entries, got {explicit_count}')
           if len(rows)!=49 or len({k for k,_,_ in rows})!=49:
               raise SystemExit('expected exact 49-entry unique buff metadata map')
           missing=[k for k in (0,1,2,3,4,5,6,7,9,10,11,12) if k not in by]
