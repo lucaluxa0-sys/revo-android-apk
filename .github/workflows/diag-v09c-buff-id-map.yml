@@ -29,179 +29,158 @@ jobs:
       - name: Install parsers
         run: python3 -m pip install --disable-pip-version-check pefile capstone
 
-      - name: Prove BuffType keys and MoveSpeed interface slot
+      - name: Trace compiler-emitted BuffType keys and MoveSpeed slot
         shell: python
         run: |
           from pathlib import Path
           import bisect, struct
           import pefile
           from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
 
           EXE = Path('.cache/RevolutionMacro.exe')
           SHA = '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb'
           MOVE_SPEED = 0x140c1c820
           WALK = 0x140c61480
+          INIT = 0x140c17bc0
+          MAPASSIGN_FAST64 = 0x14000cdc0
           BUFF_ITAB = 0x1425ef060
           BUFF_INTERFACE_TYPE = 0x141e91c40
+          TABLE_LO = 0x142643e00
+          TABLE_HI = 0x142644600
 
           raw = EXE.read_bytes()
           pe = pefile.PE(str(EXE), fast_load=False)
           base = int(pe.OPTIONAL_HEADER.ImageBase)
           image_size = int(pe.OPTIONAL_HEADER.SizeOfImage)
-          sections = [
-              dict(raw=int(s.PointerToRawData), size=int(s.SizeOfRawData),
-                   rva=int(s.VirtualAddress), data=s.get_data())
-              for s in pe.sections
-          ]
+          sections = [dict(raw=int(s.PointerToRawData), size=int(s.SizeOfRawData),
+                           rva=int(s.VirtualAddress), data=s.get_data()) for s in pe.sections]
 
           def va2off(va):
               rva = va - base
-              if 0 <= rva < int(pe.OPTIONAL_HEADER.SizeOfHeaders):
-                  return rva
+              if 0 <= rva < int(pe.OPTIONAL_HEADER.SizeOfHeaders): return rva
               for s in sections:
                   if s['rva'] <= rva < s['rva'] + s['size']:
                       return s['raw'] + rva - s['rva']
               return None
 
           def qva(va):
-              off = va2off(va)
-              if off is None or off + 8 > len(raw):
-                  raise SystemExit(f'unmapped qword VA {va:#x}')
-              return struct.unpack_from('<Q', raw, off)[0]
-
+              o=va2off(va)
+              if o is None or o+8>len(raw): raise SystemExit(f'unmapped qword {va:#x}')
+              return struct.unpack_from('<Q',raw,o)[0]
           def u32(o): return struct.unpack_from('<I', raw, o)[0]
           def i32(o): return struct.unpack_from('<i', raw, o)[0]
-
-          def cstr(va, limit=800):
-              off = va2off(va)
-              if off is None: return None
-              z = raw.find(b'\0', off, min(len(raw), off + limit))
-              z = min(len(raw), off + limit) if z < 0 else z
-              try: return raw[off:z].decode('utf-8')
+          def cstr(va,limit=800):
+              o=va2off(va)
+              if o is None: return None
+              z=raw.find(b'\0',o,min(len(raw),o+limit)); z=min(len(raw),o+limit) if z<0 else z
+              try: return raw[o:z].decode('utf-8')
               except Exception: return None
+          def go_string(hva):
+              ptr=qva(hva); ln=qva(hva+8); o=va2off(ptr)
+              if o is None or ln>256 or o+ln>len(raw): return ptr,ln,None
+              try: return ptr,ln,raw[o:o+ln].decode('utf-8')
+              except Exception: return ptr,ln,None
 
-          def go_string(header_va):
-              ptr = qva(header_va)
-              ln = qva(header_va + 8)
-              off = va2off(ptr)
-              if off is None or ln > 256 or off + ln > len(raw):
-                  return ptr, ln, None
-              try: text = raw[off:off+ln].decode('utf-8')
-              except Exception: text = None
-              return ptr, ln, text
-
-          # Recover Go function table using the same hotfix3 moduledata anchor
-          # already validated by the earlier diagnostics.
-          minpc = 0x1400014a0
-          best = None
-          p = 0
+          minpc=0x1400014a0; best=None; p=0
           while True:
-              h = raw.find(struct.pack('<Q', minpc), p)
-              if h < 0: break
-              md = h - 160
-              if md >= 0:
-                  ft=struct.unpack_from('<Q',raw,md+128)[0]
-                  n=struct.unpack_from('<Q',raw,md+136)[0]
-                  cap=struct.unpack_from('<Q',raw,md+144)[0]
-                  text=struct.unpack_from('<Q',raw,md+176)[0]
-                  fn=struct.unpack_from('<Q',raw,md+8)[0]
-                  pcln=struct.unpack_from('<Q',raw,md+104)[0]
-                  score=sum([text==minpc, 1000<n<500000, cap>=n,
-                             va2off(ft)is not None, va2off(fn)is not None,
-                             va2off(pcln)is not None])
-                  if best is None or score > best[0]:
-                      best=(score,(ft,n,text,fn,pcln))
+              h=raw.find(struct.pack('<Q',minpc),p)
+              if h<0: break
+              md=h-160
+              if md>=0:
+                  ft=struct.unpack_from('<Q',raw,md+128)[0]; n=struct.unpack_from('<Q',raw,md+136)[0]
+                  cap=struct.unpack_from('<Q',raw,md+144)[0]; text=struct.unpack_from('<Q',raw,md+176)[0]
+                  fn=struct.unpack_from('<Q',raw,md+8)[0]; pcln=struct.unpack_from('<Q',raw,md+104)[0]
+                  score=sum([text==minpc,1000<n<500000,cap>=n,va2off(ft)is not None,
+                             va2off(fn)is not None,va2off(pcln)is not None])
+                  if best is None or score>best[0]: best=(score,(ft,n,text,fn,pcln))
               p=h+1
-          if not best or best[0] < 5:
-              raise SystemExit('moduledata recovery failed')
+          if not best or best[0]<5: raise SystemExit('moduledata recovery failed')
 
-          ft,n,text,fn,pcln=best[1]
-          fo=va2off(ft); po=va2off(pcln)
-          funcs=[]
+          ft,n,text,fn,pcln=best[1]; fo=va2off(ft); po=va2off(pcln); funcs=[]
           for i in range(int(n)-1):
-              ent=u32(fo+i*8); funcoff=u32(fo+i*8+4); fm=po+funcoff
-              if not (0 <= fm+8 < len(raw)): continue
+              ent=u32(fo+i*8); foff=u32(fo+i*8+4); fm=po+foff
+              if not (0<=fm+8<len(raw)): continue
               nm=cstr(fn+i32(fm+4)); addr=text+ent
-              if nm and base <= addr < base+image_size:
-                  funcs.append((addr,nm))
-          funcs.sort()
-          names=dict(funcs)
-          addrs=[a for a,_ in funcs]
+              if nm and base<=addr<base+image_size: funcs.append((addr,nm))
+          funcs.sort(); addrs=[a for a,_ in funcs]; names=dict(funcs)
           if not names.get(MOVE_SPEED,'').endswith('.MoveSpeed'):
               raise SystemExit(f'MoveSpeed address drift: {names.get(MOVE_SPEED)!r}')
-
-          out=[]
-          out.append(f'PINNED_SHA256={SHA}')
-          out.append(f'MOVE_SPEED={MOVE_SPEED:#x} {names[MOVE_SPEED]}')
-          out.append('')
-          out.append('===== STATIC BUFF METADATA ENTRY KEYS =====')
-
-          # Previous pinned-binary xref evidence proved these are 0x88-byte
-          # static {key, elem} records. Name is elem+0x40 => entry+0x48;
-          # ImagePresent is elem+0x70 => entry+0x78.
-          entries = [
-              ('Haste',          0x1425f58d0, 'Haste',          None),
-              ('HastePlus',      0x1425f5958, 'HastePlus',      None),
-              ('HasteCoconut',   0x142643ef8, 'HasteCoconut',   None),
-              ('BlackBear',      0x142643f80, 'BlackBear',      'black_bear'),
-              ('BrownBear',      0x142644008, 'BrownBear',      'brown_bear'),
-              ('GummyBear',      0x142644090, 'GummyBear',      'gummy_bear'),
-              ('MotherBear',     0x142644118, 'MotherBear',     'mother_bear'),
-              ('PandaBear',      0x1426441a0, 'PandaBear',      'panda_bear'),
-              ('PolarBear',      0x142644228, 'PolarBear',      'polar_bear'),
-              ('ScienceBear',    0x1426442b0, 'ScienceBear',    'science_bear'),
-              ('Oil',            0x142644338, None,             'oil'),
-              ('SuperSmoothie',  0x1426443c0, 'SuperSmoothie',  'smoothie'),
-          ]
-
-          key_by_label={}
-          for label,entry,name_expected,image_expected in entries:
-              key=qva(entry)
-              _,_,name=go_string(entry+0x48)
-              _,_,image=go_string(entry+0x78)
-              if name_expected is not None and name != name_expected:
-                  raise SystemExit(f'{label} name header drift: entry={entry:#x} got={name!r}')
-              if image_expected is not None and image != image_expected:
-                  raise SystemExit(f'{label} image header drift: entry={entry:#x} got={image!r}')
-              key_by_label[label]=key
-              out.append(f'{label}: key={key} entry={entry:#x} name={name!r} image={image!r}')
-
-          expected = {
-              'Haste':0, 'HastePlus':1, 'HasteCoconut':2,
-              'BlackBear':3, 'MotherBear':4, 'PandaBear':5,
-              'PolarBear':6, 'BrownBear':7, 'ScienceBear':9,
-              'GummyBear':10, 'Oil':11, 'SuperSmoothie':12,
-          }
-          if key_by_label != expected:
-              raise SystemExit(f'BuffType mapping mismatch: got={key_by_label!r} expected={expected!r}')
-
-          out.append('')
-          out.append('===== common.BuffDetector ITAB =====')
-          inter=qva(BUFF_ITAB)
-          concrete=qva(BUFF_ITAB+8)
-          out.append(f'itab={BUFF_ITAB:#x} inter={inter:#x} concrete_type={concrete:#x}')
-          if inter != BUFF_INTERFACE_TYPE:
-              raise SystemExit(f'BuffDetector interface type drift: {inter:#x}')
-          for i in range(9):
-              fnva=qva(BUFF_ITAB+0x18+(i*8))
-              out.append(f'fun[{i}] off={0x18+i*8:#x} addr={fnva:#x} name={names.get(fnva,"<unresolved>")}')
-          move_slot=qva(BUFF_ITAB+0x28)
-          if move_slot != MOVE_SPEED:
-              raise SystemExit(f'BuffDetector fun[2]/+0x28 drift: {move_slot:#x}')
-          out.append('PROVED MoveSpeed interface slot = fun[2] = itab+0x28')
-
-          out.append('')
-          out.append('===== Walk indirect MoveSpeed call context =====')
           def fend(a):
-              i=bisect.bisect_left(addrs,a)
-              return addrs[i+1] if i+1 < len(addrs) else a+0x10000
-          start=va2off(WALK); end=va2off(fend(WALK))
-          if start is None or end is None:
-              raise SystemExit('Walk mapping failed')
-          mdx=Cs(CS_ARCH_X86,CS_MODE_64)
-          for ins in mdx.disasm(raw[start:end],WALK):
-              if 0x140c61570 <= ins.address <= 0x140c61591:
+              i=bisect.bisect_left(addrs,a); return addrs[i+1] if i+1<len(addrs) else a+0x10000
+          def disasm_func(a):
+              s=va2off(a); e=va2off(fend(a))
+              if s is None or e is None: return []
+              md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
+              return list(md.disasm(raw[s:e],a))
+
+          out=[f'PINNED_SHA256={SHA}',f'MOVE_SPEED={MOVE_SPEED:#x} {names[MOVE_SPEED]}','']
+
+          out.append('===== VERIFIED METADATA VALUE RECORDS =====')
+          # These addresses were recovered from the preceding xref run. They are
+          # 0x88-byte metadata VALUE records; the prior failed key hypothesis is
+          # intentionally not reused.
+          values=[
+              ('Haste',0x1425f58d0,'Haste',None),('HastePlus',0x1425f5958,'HastePlus',None),
+              ('HasteCoconut',0x142643ef8,'HasteCoconut',None),('BlackBear',0x142643f80,'BlackBear','black_bear'),
+              ('BrownBear',0x142644008,'BrownBear','brown_bear'),('GummyBear',0x142644090,'GummyBear','gummy_bear'),
+              ('MotherBear',0x142644118,'MotherBear','mother_bear'),('PandaBear',0x1426441a0,'PandaBear','panda_bear'),
+              ('PolarBear',0x142644228,'PolarBear','polar_bear'),('ScienceBear',0x1426442b0,'ScienceBear','science_bear'),
+              ('Oil',0x142644338,None,'oil'),('SuperSmoothie',0x1426443c0,'SuperSmoothie','smoothie')]
+          for label,va,nexp,iexp in values:
+              _,_,name=go_string(va+0x48); _,_,image=go_string(va+0x78)
+              if nexp is not None and name!=nexp: raise SystemExit(f'{label} name drift {name!r}')
+              if iexp is not None and image!=iexp: raise SystemExit(f'{label} image drift {image!r}')
+              out.append(f'{label}: value={va:#x} firstQword={qva(va):#x} name={name!r} image={image!r}')
+
+          out += ['','===== common.BuffDetector ITAB =====']
+          inter=qva(BUFF_ITAB); concrete=qva(BUFF_ITAB+8)
+          out.append(f'itab={BUFF_ITAB:#x} inter={inter:#x} concrete_type={concrete:#x}')
+          if inter!=BUFF_INTERFACE_TYPE: raise SystemExit(f'BuffDetector type drift {inter:#x}')
+          for i in range(9):
+              fnva=qva(BUFF_ITAB+0x18+i*8)
+              out.append(f'fun[{i}] off={0x18+i*8:#x} addr={fnva:#x} name={names.get(fnva,"<unresolved>")}')
+          if qva(BUFF_ITAB+0x28)!=MOVE_SPEED:
+              raise SystemExit(f'fun[2] is not MoveSpeed: {qva(BUFF_ITAB+0x28):#x}')
+          out.append('PROVED MoveSpeed = BuffDetector fun[2] = itab+0x28')
+
+          out += ['','===== Walk MoveSpeed call context =====']
+          for ins in disasm_func(WALK):
+              if 0x140c61570<=ins.address<=0x140c61591:
                   out.append(f'{ins.address:#x}: {ins.mnemonic:8s} {ins.op_str}')
+
+          out += ['','===== detector init mapassign_fast64 contexts =====']
+          ii=disasm_func(INIT); assigns=[]
+          for idx,ins in enumerate(ii):
+              is_map=False
+              if ins.mnemonic=='call' and ins.operands and ins.operands[0].type==X86_OP_IMM:
+                  is_map=(ins.operands[0].imm==MAPASSIGN_FAST64)
+              if not is_map: continue
+              assigns.append(ins.address)
+              out.append(f'----- mapassign @ {ins.address:#x} -----')
+              for x in ii[max(0,idx-28):min(len(ii),idx+14)]:
+                  out.append(f'{x.address:#x}: {x.mnemonic:9s} {x.op_str}')
+          out.append(f'MAPASSIGN_COUNT={len(assigns)}')
+
+          out += ['','===== detector init refs into metadata table region =====']
+          table_refs=0
+          for idx,ins in enumerate(ii):
+              targets=[]
+              for op in ins.operands:
+                  if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                      t=ins.address+ins.size+op.mem.disp
+                      if TABLE_LO<=t<TABLE_HI: targets.append(t)
+              if not targets: continue
+              table_refs+=1
+              out.append(f'----- ref @ {ins.address:#x} -> {",".join(hex(t) for t in targets)} -----')
+              for x in ii[max(0,idx-24):min(len(ii),idx+25)]:
+                  out.append(f'{x.address:#x}: {x.mnemonic:9s} {x.op_str}')
+          out.append(f'TABLE_REF_COUNT={table_refs}')
+
+          out += ['','===== raw qwords around metadata table =====']
+          for va in range(TABLE_LO,TABLE_HI,8):
+              v=qva(va)
+              if v!=0: out.append(f'{va:#x}: {v:#018x}')
 
           Path('buff-id-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
           print('\n'.join(out))
