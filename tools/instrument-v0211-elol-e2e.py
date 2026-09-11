@@ -60,9 +60,9 @@ method = r'''
                 "c.Set('invertFB',false);c.Set('invertLR',false);c.Set('shiftLock',false);c.Set('zoom',0);" +
                 "c.Set('length',8);c.Set('width',2);c.Set('distance',0);c.Set('alignment',0);c.Set('repetitions',0);" +
                 "c.Set('driftComp',true);c.Set('position','center');c.Set('yaw',0);c.Set('pitch',0);" +
-                "localStorage.setItem('revo.android.msPerStud','12');localStorage.setItem('revo.android.joystickCenterX','0.16');" +
-                "localStorage.setItem('revo.android.joystickCenterY','0.78');localStorage.setItem('revo.android.joystickRadius','0.085');" +
-                "localStorage.setItem('revo.android.jumpX','0.88');localStorage.setItem('revo.android.jumpY','0.78');" +
+                "localStorage.setItem('revo.android.msPerStud','12');localStorage.setItem('revo.android.joystickCenterX','0.09583333333333334');" +
+                "localStorage.setItem('revo.android.joystickCenterY','0.8657407407407407');localStorage.setItem('revo.android.joystickRadius','0.08333333333333333');" +
+                "localStorage.setItem('revo.android.jumpX','0.90375');localStorage.setItem('revo.android.jumpY','0.8648148148148148');" +
                 "const cfg=window.RevoAndroidDebug&&window.RevoAndroidDebug.engineConfig?window.RevoAndroidDebug.engineConfig('Default'):null;" +
                 "console.error('RevoElolPrepared '+JSON.stringify(cfg));" +
                 "const buttons=[...document.querySelectorAll('button')];" +
