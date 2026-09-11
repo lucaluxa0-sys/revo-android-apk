@@ -30,7 +30,8 @@ required = [
     'desktop pinetree-br.pinetree-center: Backward+Left 70',
     'desktop pinetree-br.pinetree-center: Left 20',
     'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center',
-    '"gatherPattern":"e_lol"',
+    'configured pattern=e_lol steps=18',
+    'action pattern=e_lol step=',
     'RevoMovementEvidence',
     'confirmed=true',
 ]
@@ -83,6 +84,11 @@ if not states:
 state = states[-1]
 routing = state.get('routing') or {}
 assert state.get('running') is True, state
+# engineConfig normalizes the desktop preset's gatherPattern key to patternName.
+# Validate the authoritative running engine schema instead of a stale frontend key name.
+assert state.get('routine') == 'gather', state
+assert state.get('patternName') == 'e_lol', state
+assert state.get('patternStepCount') == 18, state
 assert routing.get('state') == 'FIELD_READY', routing
 assert routing.get('claimedHive') == 3, routing
 assert routing.get('cannonSlotMoves') == 3, routing
