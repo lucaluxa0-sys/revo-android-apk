@@ -1,24 +1,47 @@
 #!/usr/bin/env python3
+import re
 from pathlib import Path
 
 JAVA = Path('revo-android/app/src/main/java/com/revolution/android')
 MANIFEST = Path('revo-android/app/src/main/AndroidManifest.xml')
 SERVICE = JAVA / 'RevoAccessibilityService.java'
 RECEIVER = JAVA / 'RevoPhysicsProbeReceiver.java'
+BACKEND = Path('patches/android-backend-v0.2.9.js')
 
-for path in (MANIFEST, SERVICE):
+for path in (MANIFEST, SERVICE, BACKEND):
     if not path.exists():
-        raise SystemExit(f'missing reconstructed production source: {path}')
+        raise SystemExit(f'missing production input: {path}')
 
 svc = SERVICE.read_text(encoding='utf-8')
 for marker in ('runJoystickTapSequence', 'fullDeflectionMs=', 'joystickWithTimedTaps'):
     if marker not in svc:
         raise SystemExit(f'production joystick adaptation missing marker: {marker}')
 
+backend = BACKEND.read_text(encoding='utf-8')
+
+def production_default(prop, storage_key):
+    pattern = re.compile(
+        rf"{re.escape(prop)}\s*:\s*localNumber\(\s*'{re.escape(storage_key)}'\s*,\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)"
+    )
+    matches = pattern.findall(backend)
+    if len(matches) != 1:
+        raise SystemExit(
+            f'expected exactly one production default for {prop}/{storage_key}, got {matches!r}'
+        )
+    return matches[0]
+
+geometry = {
+    '__JOY_X__': production_default('joystickCenterX', 'revo.android.joystickCenterX'),
+    '__JOY_Y__': production_default('joystickCenterY', 'revo.android.joystickCenterY'),
+    '__JOY_R__': production_default('joystickRadius', 'revo.android.joystickRadius'),
+    '__JUMP_X__': production_default('jumpX', 'revo.android.jumpX'),
+    '__JUMP_Y__': production_default('jumpY', 'revo.android.jumpY'),
+}
+
 if RECEIVER.exists():
     raise SystemExit('CI physics receiver already exists')
 
-RECEIVER.write_text(r'''package com.revolution.android;
+receiver = r'''package com.revolution.android;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -31,6 +54,7 @@ import android.view.WindowManager;
 /** CI-only entry point that calls the real production Accessibility joystick adapter. */
 public final class RevoPhysicsProbeReceiver extends BroadcastReceiver {
     private static final String TAG = "RevoPhysicsProbe";
+    private static final String GEOMETRY_SOURCE = "android-backend-v0.2.9.js";
 
     @Override public void onReceive(Context context, Intent intent) {
         RevoAccessibilityService svc = RevoAccessibilityService.get();
@@ -50,9 +74,11 @@ public final class RevoPhysicsProbeReceiver extends BroadcastReceiver {
         display.getRealSize(size);
         int displayId = display.getDisplayId();
         float w = size.x, h = size.y;
-        float cx = w * 0.16f, cy = h * 0.78f;
-        float r = Math.min(w, h) * 0.085f;
-        float jumpX = w * 0.88f, jumpY = h * 0.78f;
+        // These literals are generated from the production Android backend defaults.
+        // Radius follows the production native adapter: normalized against min(width,height).
+        float cx = w * __JOY_X__f, cy = h * __JOY_Y__f;
+        float r = Math.min(w, h) * __JOY_R__f;
+        float jumpX = w * __JUMP_X__f, jumpY = h * __JUMP_Y__f;
         float tx, ty;
         boolean accepted;
 
@@ -66,6 +92,7 @@ public final class RevoPhysicsProbeReceiver extends BroadcastReceiver {
         Log.i(TAG, "PHYSICS_DISPATCH id=" + id
                 + " mode=" + mode + " holdMs=" + holdMs
                 + " display=" + displayId + " w=" + size.x + " h=" + size.y
+                + " geometrySource=" + GEOMETRY_SOURCE
                 + " cx=" + cx + " cy=" + cy + " r=" + r
                 + " tx=" + tx + " ty=" + ty
                 + " jumpX=" + jumpX + " jumpY=" + jumpY);
@@ -87,7 +114,12 @@ public final class RevoPhysicsProbeReceiver extends BroadcastReceiver {
         Log.i(TAG, "PHYSICS_ACCEPTED id=" + id + " accepted=" + accepted);
     }
 }
-''', encoding='utf-8')
+'''
+for placeholder, value in geometry.items():
+    receiver = receiver.replace(placeholder, value)
+if '__JOY_' in receiver or '__JUMP_' in receiver:
+    raise SystemExit('unresolved production geometry placeholder in CI receiver')
+RECEIVER.write_text(receiver, encoding='utf-8')
 
 text = MANIFEST.read_text(encoding='utf-8')
 if 'RevoPhysicsProbeReceiver' in text:
@@ -98,3 +130,5 @@ if text.count(marker) != 1:
 entry = '''        <receiver android:name=".RevoPhysicsProbeReceiver" android:exported="true">\n            <intent-filter><action android:name="com.revolution.android.PHYSICS_PROBE" /></intent-filter>\n        </receiver>\n'''
 MANIFEST.write_text(text.replace(marker, entry + marker, 1), encoding='utf-8')
 print('Injected CI-only v0.2.12 joystick screen-physics receiver')
+print('Production geometry source:', BACKEND)
+print('Production geometry defaults:', geometry)
