@@ -10,7 +10,9 @@ on:
 permissions:
   contents: read
 
-# Diagnostic-only source export. Touching this comment triggers a fresh archive rebuild.
+# Diagnostic-only export of the production Java tree after the native v0.2.12
+# patch sequence. CI-only e_lol acceleration instrumentation is intentionally
+# excluded so this artifact reflects production timing defaults.
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -24,15 +26,31 @@ jobs:
           cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/source.zip
           unzip -q /tmp/source.zip
           test -d revo-android/app/src/main/java/com/revolution/android
+      - name: Apply exact production native patch sequence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-field-routing.py
+          python3 tools/patch-native-v0212-template-contrast.py
+          python3 -m py_compile \
+            tools/patch-native-v0211-bee-swarm-launch.py \
+            tools/patch-native-v0212-hive-routing.py \
+            tools/patch-native-v0212-field-routing.py \
+            tools/patch-native-v0212-template-contrast.py
+          test -s revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'CAPTURE_CALLBACK_TIMEOUT_MS' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+          grep -q 'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
       - name: Inventory native source
         shell: bash
         run: |
           set -euo pipefail
           find revo-android/app/src/main -type f -print | sort | tee /tmp/android-source-files.txt
-      - name: Upload exact reconstructed Android source
+      - name: Upload exact post-patch Android source
         uses: actions/upload-artifact@v4
         with:
-          name: current-revo-android-source
+          name: current-revo-android-postpatch-source
           path: |
             revo-android/
             /tmp/android-source-files.txt
