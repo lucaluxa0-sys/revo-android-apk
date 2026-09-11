@@ -21,6 +21,15 @@ router = replace_once(
         FAILED
 ''',
     '''        READY_AT_CANNON,
+        CANNON_BLACK_BEAR_FORWARD,
+        CANNON_BLACK_BEAR_RIGHT,
+        BLACK_BEAR_CHECKPOINT_WALK,
+        BLACK_BEAR_CHECKPOINT_DETECT,
+        BLACK_BEAR_CHECKPOINT_FAILED,
+        SUNFLOWER_ROUTE_LEFT,
+        SUNFLOWER_ROUTE_BACKWARD,
+        SUNFLOWER_ROUTE_ALIGN_RIGHT,
+        SUNFLOWER_ROUTE_FORWARD,
         CANNON_ROUTE_INTERACT,
         CANNON_ROUTE_FLIGHT,
         CANNON_ROUTE_ALIGN_DIAGONAL,
@@ -42,6 +51,7 @@ router = replace_once(
     '''    private volatile int cannonSlotMoves = 0;
     private volatile int currentYawSlot = 0;
     private volatile long fieldRouteActionCount = 0;
+    private volatile int blackBearCheckpointAttempts = 0;
     private volatile boolean lastGestureAccepted;
 ''',
     'route state fields'
@@ -52,6 +62,7 @@ router = replace_once(
     '''        cannonSlotMoves = 0; lastGestureAccepted = false; lastAction = ""; lastError = ""; lastTemplate = ""; lastMatch = null;
 ''',
     '''        cannonSlotMoves = 0; currentYawSlot = 0; fieldRouteActionCount = 0;
+        blackBearCheckpointAttempts = 0;
         lastGestureAccepted = false; lastAction = ""; lastError = ""; lastTemplate = ""; lastMatch = null;
 ''',
     'onStart reset'
@@ -62,6 +73,14 @@ old_ready = '''            case READY_AT_CANNON:
                 break;
 '''
 new_ready = r'''            case READY_AT_CANNON:
+                if (isSunflower(c.field)) {
+                    blackBearCheckpointAttempts = 0;
+                    // Exact v0.9c-hotfix3 edge 118 cannon.black-bear begins at yaw slot 2.
+                    if (setYaw(frame, svc, 2, 300, "desktop cannon.black-bear: SetYaw(2)")) {
+                        transitionAfterGesture(State.CANNON_BLACK_BEAR_FORWARD);
+                    }
+                    break;
+                }
                 if (!isPineTree(c.field)) return fail("unsupported field route: " + c.field);
                 // v0.9c-hotfix3 datasets/v8 route "cannon.pinetree-br":
                 // SetYaw(4); Sleep(300); E; hold Forward+Left; jump at
@@ -133,6 +152,73 @@ new_ready = r'''            case READY_AT_CANNON:
                     Log.i(TAG, "FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center field=" + c.field);
                 }
                 break;
+            case CANNON_BLACK_BEAR_FORWARD:
+                // Walk({[0]=Forward,[30]=Right,[80]=End}) => Forward 30, then Right 50.
+                if (moveField(frame, svc, c, Direction.FORWARD, 30.0,
+                        "desktop cannon.black-bear: Walk Forward 30")) {
+                    transitionAfterGesture(State.CANNON_BLACK_BEAR_RIGHT);
+                }
+                break;
+            case CANNON_BLACK_BEAR_RIGHT:
+                if (moveField(frame, svc, c, Direction.RIGHT, 50.0,
+                        "desktop cannon.black-bear: Walk Right 50")) {
+                    transitionAfterGesture(State.BLACK_BEAR_CHECKPOINT_WALK);
+                }
+                break;
+            case BLACK_BEAR_CHECKPOINT_WALK:
+                if (moveField(frame, svc, c, Direction.BACKWARD, 10.0,
+                        "desktop cannon.black-bear Checkpoint WalkDetector interaction: Backward 10")) {
+                    transitionAfterGesture(State.BLACK_BEAR_CHECKPOINT_DETECT);
+                }
+                break;
+            case BLACK_BEAR_CHECKPOINT_DETECT: {
+                Match p = find(frame, "press_e", c, now);
+                if (p != null) {
+                    lastMatch = p;
+                    if (setYaw(frame, svc, 0, 0, "desktop black-bear.sunflower-tr: SetYaw(0)")) {
+                        transitionAfterGesture(State.SUNFLOWER_ROUTE_LEFT);
+                    }
+                    break;
+                }
+                blackBearCheckpointAttempts++;
+                if (moveField(frame, svc, c, Direction.BACKWARD, 5.0,
+                        "desktop cannon.black-bear Checkpoint Nudge Backward 5 attempt " + blackBearCheckpointAttempts)) {
+                    if (blackBearCheckpointAttempts >= 3) {
+                        transitionAfterGesture(State.BLACK_BEAR_CHECKPOINT_FAILED);
+                    } else {
+                        transitionAfterGesture(State.BLACK_BEAR_CHECKPOINT_DETECT);
+                    }
+                }
+                break;
+            }
+            case BLACK_BEAR_CHECKPOINT_FAILED:
+                return fail("desktop cannon.black-bear checkpoint interaction failed after 3 attempts");
+            case SUNFLOWER_ROUTE_LEFT:
+                if (moveField(frame, svc, c, Direction.LEFT, 30.0,
+                        "desktop black-bear.sunflower-tr: Walk Left 30")) {
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_BACKWARD);
+                }
+                break;
+            case SUNFLOWER_ROUTE_BACKWARD:
+                if (moveField(frame, svc, c, Direction.BACKWARD, 70.0,
+                        "desktop black-bear.sunflower-tr: Walk Backward 70")) {
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_ALIGN_RIGHT);
+                }
+                break;
+            case SUNFLOWER_ROUTE_ALIGN_RIGHT:
+                // Exact edge 59 command is WalkAlign(Right,35), not Left.
+                if (moveField(frame, svc, c, Direction.RIGHT, 35.0,
+                        "desktop black-bear.sunflower-tr: WalkAlign Right 35")) {
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_FORWARD);
+                }
+                break;
+            case SUNFLOWER_ROUTE_FORWARD:
+                if (moveField(frame, svc, c, Direction.FORWARD, 40.0,
+                        "desktop black-bear.sunflower-tr: Walk Forward 40")) {
+                    transitionAfterGesture(State.FIELD_READY);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=cannon->black-bear->sunflower-tr field=" + c.field);
+                }
+                break;
             case FIELD_READY:
                 lastDecision = "ready:field:" + c.field;
                 return true;
@@ -144,6 +230,11 @@ helper_anchor = '''    private void prepareNextHive() {
 helpers = r'''    private boolean isPineTree(String field) {
         String n = field == null ? "" : field.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
         return "pinetree".equals(n) || "pinetreeforest".equals(n);
+    }
+
+    private boolean isSunflower(String field) {
+        String n = field == null ? "" : field.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
+        return "sunflower".equals(n) || "sunflowerfield".equals(n);
     }
 
     /**
@@ -218,8 +309,11 @@ router = replace_once(
     '''            r.put("source", "GPL Revolution ClaimHive+GotoCannon 3f890744b55a");
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
             r.put("fieldRouteDatasetSha256", "c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f");
-            r.put("fieldRoute", "cannon->pinetree-br->pinetree-center");
+            r.put("fieldRoute", c != null && isSunflower(c.field)
+                    ? "cannon->black-bear->sunflower-tr"
+                    : "cannon->pinetree-br->pinetree-center");
             r.put("fieldRouteActionCount", fieldRouteActionCount);
+            r.put("blackBearCheckpointAttempts", blackBearCheckpointAttempts);
             r.put("currentYawSlot", currentYawSlot);
             r.put("androidInputAdaptation", "accessibility-joystick-touch-v1");
             r.put("androidCameraYawAdaptation", "8-slot-camera-drag-v1");
@@ -411,4 +505,4 @@ macro = replace_once(
 )
 macro_path.write_text(macro, encoding='utf-8')
 
-print('PASS: patched v0.2.12 source-grounded cannon -> Pine Tree -> Gather handoff + screenshot callback watchdog')
+print('PASS: patched v0.2.12 source-grounded cannon -> Pine Tree/Sunflower -> Gather handoff + screenshot callback watchdog')
