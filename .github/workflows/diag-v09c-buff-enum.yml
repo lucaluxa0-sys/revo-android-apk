@@ -1,0 +1,156 @@
+name: Recover exact v0.9c buff enum mapping
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-buff-enum.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache buff-enum-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Install parsers
+        run: python3 -m pip install --disable-pip-version-check pefile capstone
+
+      - name: Recover buff enum initialization evidence
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, re, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_GRP_CALL
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+
+          EXE=Path('.cache/RevolutionMacro.exe')
+          INIT=0x140c17bc0
+          raw=EXE.read_bytes(); pe=pefile.PE(str(EXE),fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase); image_size=int(pe.OPTIONAL_HEADER.SizeOfImage)
+          sections=[dict(raw=int(s.PointerToRawData),size=int(s.SizeOfRawData),rva=int(s.VirtualAddress),data=s.get_data()) for s in pe.sections]
+          def va2off(va):
+              rva=va-base
+              if 0<=rva<int(pe.OPTIONAL_HEADER.SizeOfHeaders): return rva
+              for s in sections:
+                  if s['rva']<=rva<s['rva']+s['size']: return s['raw']+rva-s['rva']
+              return None
+          def q(o): return struct.unpack_from('<Q',raw,o)[0]
+          def u32(o): return struct.unpack_from('<I',raw,o)[0]
+          def i32(o): return struct.unpack_from('<i',raw,o)[0]
+          def cstr(va,limit=300):
+              o=va2off(va)
+              if o is None:return None
+              z=raw.find(b'\0',o,min(len(raw),o+limit)); z=min(len(raw),o+limit) if z<0 else z
+              b=raw[o:z]
+              if len(b)<2:return None
+              try:s=b.decode('utf-8')
+              except:return None
+              if not all(ch.isprintable() or ch in '\t\r\n' for ch in s):return None
+              return s
+
+          # Recover Go function table from the already-proven hotfix3 moduledata anchor.
+          minpc=0x1400014a0; best=None; p=0
+          while True:
+              h=raw.find(struct.pack('<Q',minpc),p)
+              if h<0:break
+              md=h-160
+              if md>=0:
+                  ft=q(md+128);n=q(md+136);cap=q(md+144);text=q(md+176);fn=q(md+8);pcln=q(md+104)
+                  score=sum([text==minpc,1000<n<500000,cap>=n,va2off(ft)is not None,va2off(fn)is not None,va2off(pcln)is not None])
+                  if best is None or score>best[0]:best=(score,(ft,n,text,fn,pcln))
+              p=h+1
+          if not best or best[0]<5:raise SystemExit('moduledata recovery failed')
+          ft,n,text,fn,pcln=best[1];fo=va2off(ft);po=va2off(pcln);funcs=[]
+          for i in range(int(n)-1):
+              ent=u32(fo+i*8);funcoff=u32(fo+i*8+4);fm=po+funcoff
+              if not(0<=fm+8<len(raw)):continue
+              name=cstr(fn+i32(fm+4));addr=text+ent
+              if name and base<=addr<base+image_size:funcs.append((addr,name))
+          funcs.sort(); addrs=[a for a,_ in funcs]; names=dict(funcs)
+          if names.get(INIT)!='github.com/nosyliam/revolution/pkg/detection/buff.init' and not names.get(INIT,'').endswith('.init'):
+              # Package path is obfuscated in this build; assert the exact recovered address and init suffix.
+              raise SystemExit(f'package init address drift: {INIT:#x} -> {names.get(INIT)!r}')
+          def fend(a):
+              i=bisect.bisect_left(addrs,a);return addrs[i+1] if i+1<len(addrs) else a+0x10000
+          def code(a):
+              e=fend(a)
+              for s in sections:
+                  sv=base+s['rva'];ev=sv+len(s['data'])
+                  if sv<=a<ev:return s['data'][a-sv:min(len(s['data']),e-sv)]
+              return b''
+
+          mdx=Cs(CS_ARCH_X86,CS_MODE_64);mdx.detail=True
+          ii=list(mdx.disasm(code(INIT),INIT))
+          out=[]
+          out.append('PINNED_SHA256=0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb')
+          out.append(f'INIT={INIT:#x} {names.get(INIT)} END={fend(INIT):#x}')
+          out.append('')
+
+          ann=[]
+          for ins in ii:
+              marks=[]
+              if ins.group(CS_GRP_CALL):
+                  for op in ins.operands:
+                      if op.type==X86_OP_IMM:
+                          t=int(op.imm)&((1<<64)-1)
+                          marks.append('CALL='+names.get(t,hex(t)))
+              for op in ins.operands:
+                  if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                      va=ins.address+ins.size+op.mem.disp;s=cstr(va)
+                      if s: marks.append('RIPSTR='+repr(s[:180]))
+              ann.append(f'{ins.address:#x}: {ins.mnemonic:9s} {ins.op_str}'+((' ; '+' | '.join(marks)) if marks else ''))
+
+          out.append('===== FULL BUFF PACKAGE INIT =====')
+          out.extend(ann)
+          out.append('')
+          out.append('===== MAP ASSIGN CONTEXTS =====')
+          assign_indexes=[]
+          for idx,ins in enumerate(ii):
+              if not ins.group(CS_GRP_CALL): continue
+              target=None
+              for op in ins.operands:
+                  if op.type==X86_OP_IMM: target=int(op.imm)&((1<<64)-1)
+              nm=names.get(target,'') if target is not None else ''
+              if 'mapassign' in nm:
+                  assign_indexes.append(idx)
+                  out.append(f'--- {ins.address:#x} {nm} ---')
+                  out.extend(ann[max(0,idx-18):min(len(ann),idx+35)])
+          if not assign_indexes:
+              raise SystemExit('no mapassign calls recovered from buff init')
+
+          # Global string evidence: this is only corroborating evidence; numeric
+          # assignments above are the causal source for the enum mapping.
+          terms=re.compile(r'(?i)(haste|smoothie|oil|bear|coconut|melody|focus|buff)')
+          hits=[]
+          for m in re.finditer(rb'[ -~]{3,160}',raw):
+              try:s=m.group().decode('ascii')
+              except:continue
+              if terms.search(s): hits.append((m.start(),s))
+          out.append('')
+          out.append('===== GLOBAL RELEVANT ASCII STRINGS =====')
+          for off,s in hits[:3000]: out.append(f'{off:#x}: {s}')
+
+          Path('buff-enum-evidence/summary.txt').write_text('\n'.join(out),encoding='utf-8')
+          print('\n'.join(out[:12000]))
+
+      - name: Upload buff enum evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-buff-enum
+          path: buff-enum-evidence/
+          if-no-files-found: error
