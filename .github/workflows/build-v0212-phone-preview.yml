@@ -15,6 +15,7 @@ on:
       - 'tools/patch-native-v0212-joystick-callback-thread.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
+      - 'patches/android-backend-v0.2.9.js'
       - 'patches/android-backend-v0.2.10.js'
 
 permissions:
