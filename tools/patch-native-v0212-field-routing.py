@@ -293,4 +293,122 @@ if 'public boolean joystickWithTimedTaps(' in svc:
 svc = replace_once(svc, svc_anchor, svc_methods + svc_anchor, 'service method insertion')
 svc_path.write_text(svc, encoding='utf-8')
 
-print('PASS: patched v0.2.12 source-grounded cannon -> Pine Tree -> Gather handoff')
+# Android 15 can occasionally drop an Accessibility screenshot consumer without
+# invoking either callback (the API 35 emulator logged "ScreenCaptureListenerWrapper
+# consumer not alive"). MacroEngine's in-flight latch would then remain set forever.
+# Recover only that no-callback case; normal frame cadence and normal error handling
+# remain unchanged. A generation token prevents a late abandoned callback from
+# racing the replacement request.
+macro_path = JAVA / 'MacroEngine.java'
+if not macro_path.exists():
+    raise SystemExit('reconstructed MacroEngine.java missing')
+
+macro = macro_path.read_text(encoding='utf-8')
+if 'CAPTURE_CALLBACK_TIMEOUT_MS' in macro:
+    raise SystemExit('capture watchdog already present')
+
+macro = replace_once(
+    macro,
+    '''    private final AtomicBoolean captureInFlight = new AtomicBoolean(false);
+''',
+    '''    private final AtomicBoolean captureInFlight = new AtomicBoolean(false);
+    private final AtomicLong captureGeneration = new AtomicLong(0);
+    private static final long CAPTURE_CALLBACK_TIMEOUT_MS = 2_000L;
+    private volatile long captureStartedAtMs = 0;
+''',
+    'capture watchdog fields'
+)
+
+macro = replace_once(
+    macro,
+    '''        captureInFlight.set(false);
+        status = "Stopped";
+''',
+    '''        captureGeneration.incrementAndGet();
+        captureStartedAtMs = 0;
+        captureInFlight.set(false);
+        status = "Stopped";
+''',
+    'capture stop invalidation'
+)
+
+macro = replace_once(
+    macro,
+    '''        if (!captureInFlight.compareAndSet(false, true)) return;
+
+        svc.screenshot(displayId, frame -> {
+            try {
+''',
+    '''        long captureNowMs = SystemClock.elapsedRealtime();
+        if (captureInFlight.get()) {
+            long ageMs = captureStartedAtMs > 0
+                    ? Math.max(0L, captureNowMs - captureStartedAtMs)
+                    : CAPTURE_CALLBACK_TIMEOUT_MS;
+            if (ageMs < CAPTURE_CALLBACK_TIMEOUT_MS) return;
+            long abandonedGeneration = captureGeneration.incrementAndGet();
+            captureStartedAtMs = 0;
+            captureInFlight.set(false);
+            lastError = "Screenshot callback timeout";
+            android.util.Log.w("RevoCapture",
+                    "watchdog recovered stalled screenshot display=" + displayId
+                            + " ageMs=" + ageMs
+                            + " generation=" + abandonedGeneration);
+        }
+        if (!captureInFlight.compareAndSet(false, true)) return;
+        final long captureToken = captureGeneration.incrementAndGet();
+        captureStartedAtMs = captureNowMs;
+
+        svc.screenshot(displayId, frame -> {
+            if (captureGeneration.get() != captureToken) {
+                if (frame != null && !frame.isRecycled()) frame.recycle();
+                return;
+            }
+            lastError = "";
+            try {
+''',
+    'capture request watchdog'
+)
+
+macro = replace_once(
+    macro,
+    '''            } finally {
+                captureInFlight.set(false);
+            }
+        }, errorCode -> {
+            lastError = "Screenshot error " + errorCode;
+            captureInFlight.set(false);
+        });
+''',
+    '''            } finally {
+                if (captureGeneration.get() == captureToken) {
+                    captureStartedAtMs = 0;
+                    captureInFlight.set(false);
+                }
+            }
+        }, errorCode -> {
+            if (captureGeneration.get() != captureToken) return;
+            lastError = "Screenshot error " + errorCode;
+            captureStartedAtMs = 0;
+            captureInFlight.set(false);
+        });
+''',
+    'capture callback generation guard'
+)
+
+macro = replace_once(
+    macro,
+    '''            o.put("lastError", lastError);
+''',
+    '''            o.put("lastError", lastError);
+            o.put("captureInFlight", captureInFlight.get());
+            o.put("captureAgeMs",
+                    captureInFlight.get() && captureStartedAtMs > 0
+                            ? Math.max(0L, SystemClock.elapsedRealtime() - captureStartedAtMs)
+                            : 0L);
+            o.put("captureGeneration", captureGeneration.get());
+''',
+    'capture watchdog diagnostics'
+)
+macro_path.write_text(macro, encoding='utf-8')
+
+print('PASS: patched v0.2.12 source-grounded cannon -> Pine Tree -> Gather handoff + screenshot callback watchdog')
