@@ -178,7 +178,7 @@ jobs:
           cat > fake-roblox/app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <application android:theme="@style/AppTheme" android:label="Fake Roblox Full Route CI">
-              <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+              <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
                 <intent-filter>
                   <action android:name="android.intent.action.MAIN" />
                   <category android:name="android.intent.category.LAUNCHER" />
@@ -321,6 +321,8 @@ jobs:
             adb shell am broadcast -a com.revolution.android.START_ELOL_GATE -p com.revolution.android | tee emulator-artifacts/start-broadcast.txt
             sleep 52
             adb exec-out screencap -p > emulator-artifacts/final.png
+            file emulator-artifacts/final.png | tee emulator-artifacts/final-file.txt
+            grep -Eq 'PNG image data, 2400 x 1080' emulator-artifacts/final-file.txt
             adb shell dumpsys activity activities > emulator-artifacts/activities.txt 2>&1 || true
             kill "$LOGCAT_PID" 2>/dev/null || true
             wait "$LOGCAT_PID" 2>/dev/null || true
