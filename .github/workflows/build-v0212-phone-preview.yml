@@ -51,7 +51,8 @@ jobs:
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'getWindows()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
-          # Phone preview must retain the production timing default, never the CI-only 12 ms/stud accelerator.
+          grep -q 'class RevoMovementSpeed' revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
+          # Production timing must use the active-preset MoveSpeed path, never the CI-only 12 ms/stud accelerator.
           ! grep -R "msPerStud.*12" revo-android/app/src/main/java/com/revolution/android revo-android/app/src/main/assets 2>/dev/null
 
       - name: Restore exact Revolution v0.9c-hotfix3 frontend
@@ -84,7 +85,9 @@ jobs:
               > revo-android/app/src/main/assets/www/android-wails-shim.js
           node --check revo-android/app/src/main/assets/www/android-wails-shim.js
           grep -q "'e_lol'" revo-android/app/src/main/assets/www/android-wails-shim.js
-          grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)" revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);" revo-android/app/src/main/assets/www/android-wails-shim.js
+          grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')" revo-android/app/src/main/assets/www/android-wails-shim.js
+          ! grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)" revo-android/app/src/main/assets/www/android-wails-shim.js
           ! grep -q "localStorage.setItem('revo.android.msPerStud','12')" revo-android/app/src/main/assets/www/android-wails-shim.js
 
       - name: Install Revolution icon and stamp preview version
@@ -122,18 +125,21 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "versionName='0.2.12-phone-preview'" /tmp/badging.txt
           unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "'e_lol'"
-          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)"
+          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);"
+          unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "msPerStud: localPositiveNumber('revo.android.msPerStud')"
+          ! unzip -p "$APK" assets/www/android-wails-shim.js | grep -q "msPerStud: localNumber('revo.android.msPerStud', 62.5)"
           SHORT_SHA="${GITHUB_SHA:0:7}"
           OUT=phone-preview-output
           mkdir -p "$OUT"
           NAME="$OUT/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-${SHORT_SHA}.apk"
           cp "$APK" "$NAME"
           sha256sum "$NAME" | tee "$OUT/SHA256SUMS-v0212-phone-preview.txt"
-          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_default_ms_per_stud=%s\nstatus=%s\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_SHA" '34582606163' '7d137f6f369a087d8b593965902b8dab9ff47123' \
+          printf 'repo=%s\nbuild_commit=%s\nfunctional_gate_run=%s\nfunctional_gate_commit=%s\ndesktop_release=%s\ndesktop_sha256=%s\nproduction_timing_model=%s\nstatus=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" '34592946556' '8b71bcc72206a8ed7c9b1ffc71ba8d339a56e4d7' \
             'nosyliam/revolution-macro v0.9c-hotfix3' \
             '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb' \
-            '62.5' 'PHONE PREVIEW ONLY - real-phone foreground recovery added; physical 1:1 movement-speed calibration pending' \
+            'active-preset MoveSpeed -> recovered desktop effective-speed duration; explicit msPerStud override only' \
+            'PHONE PREVIEW ONLY - source-grounded MoveSpeed enabled; physical Roblox world-displacement and mobile buff-recognition validation pending' \
             > "$OUT/BUILD_PROVENANCE-v0212-phone-preview.txt"
 
       - name: Upload phone preview APK
