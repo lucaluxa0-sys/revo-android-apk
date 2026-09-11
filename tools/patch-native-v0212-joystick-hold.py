@@ -3,9 +3,10 @@ from pathlib import Path
 import re
 
 ROUTER = Path('revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java')
+GATHER = Path('revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java')
 SERVICE = Path('revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java')
 
-for path in (ROUTER, SERVICE):
+for path in (ROUTER, GATHER, SERVICE):
     if not path.exists():
         raise SystemExit(f'{path.name} missing; apply the v0.2.12 native patch sequence first')
 
@@ -81,13 +82,35 @@ old_marker = '"accessibility-joystick-touch-v1"'
 if router.count(old_marker) != 1:
     raise SystemExit('router input-adaptation marker missing or duplicated')
 router = router.replace(old_marker, '"accessibility-joystick-hold-v2"', 1)
+
+router_busy_anchor = '''        if (now < nextActionAtMs) { lastDecision = "waiting:gesture:" + state; return false; }\n\n        switch (state) {\n'''
+router_busy_replacement = '''        if (now < nextActionAtMs) { lastDecision = "waiting:gesture:" + state; return false; }\n        if (svc.joystickHoldInFlight()) {\n            lastDecision = "waiting:joystick-in-flight:" + state;\n            return false;\n        }\n\n        switch (state) {\n'''
+if router.count(router_busy_anchor) != 1:
+    raise SystemExit('router joystick serialization anchor missing or duplicated')
+router = router.replace(router_busy_anchor, router_busy_replacement, 1)
 ROUTER.write_text(router, encoding='utf-8')
+
+
+gather = GATHER.read_text(encoding='utf-8')
+gather_busy_anchor = '''        if (now < nextActionAtMs) { lastDecision = "waiting:step-duration"; return; }\n        if (patternStep >= c.steps.size()) { patternStep = 0; patternIteration++; }\n'''
+gather_busy_replacement = '''        if (now < nextActionAtMs) { lastDecision = "waiting:step-duration"; return; }\n        if (svc.joystickHoldInFlight()) {\n            lastDecision = "waiting:joystick-in-flight";\n            nextActionAtMs = now + 25L;\n            return;\n        }\n        if (patternStep >= c.steps.size()) { patternStep = 0; patternIteration++; }\n'''
+if gather.count(gather_busy_anchor) != 1:
+    raise SystemExit('gather joystick serialization anchor missing or duplicated')
+gather = gather.replace(gather_busy_anchor, gather_busy_replacement, 1)
+GATHER.write_text(gather, encoding='utf-8')
+
 
 svc = SERVICE.read_text(encoding='utf-8')
 if 'joystickHoldWithTaps(' in svc:
     raise SystemExit('full-deflection joystick hold adaptation already present')
 
 joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
+    private final java.util.concurrent.atomic.AtomicBoolean joystickHoldInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    public boolean joystickHoldInFlight() {
+        return joystickHoldInFlight.get();
+    }
 
     /**
      * Android equivalent of a desktop direction-key hold.
@@ -96,8 +119,12 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
      * center->edge path for the requested hold duration only ramps joystick
      * strength for the whole command. Acquire full deflection quickly, keep the
      * pointer down, then continue it with a zero-motion stroke at the endpoint.
-     * The requested holdMs begins at full deflection; optional tap offsets are
-     * therefore relative to the same point desktop Revolution begins its hold.
+     *
+     * Gesture callbacks share the Accessibility service thread with screenshot
+     * processing. Under load, a completed acquisition callback can arrive later
+     * than its nominal duration. Keep one logical joystick command in flight until
+     * its continuation actually completes so a later macro step cannot cancel it.
+     * The router/gather adapters explicitly defer while this flag is true.
      */
     private boolean joystickHoldWithTaps(int displayId, float centerX, float centerY,
                                          float targetX, float targetY, long holdMs,
@@ -111,6 +138,13 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
                 if (offset < 0 || offset + safeTap > safeHold) return false;
             }
         }
+        if (!joystickHoldInFlight.compareAndSet(false, true)) {
+            android.util.Log.w("RevoJoystickHold",
+                    "busyRejected=true display=" + displayId
+                            + " acquireMs=" + acquireMs
+                            + " holdMs=" + safeHold);
+            return false;
+        }
 
         Path acquirePath = new Path();
         acquirePath.moveTo(centerX, centerY);
@@ -122,7 +156,7 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
                 .addStroke(acquireStroke)
                 .build();
 
-        return dispatchGesture(acquireGesture,
+        boolean acquireAccepted = dispatchGesture(acquireGesture,
                 new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
                     @Override public void onCompleted(GestureDescription completed) {
                         Path holdPath = new Path();
@@ -143,18 +177,21 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
                         boolean accepted = dispatchGesture(hold.build(),
                                 new android.accessibilityservice.AccessibilityService.GestureResultCallback() {
                                     @Override public void onCompleted(GestureDescription done) {
+                                        joystickHoldInFlight.set(false);
                                         android.util.Log.i("RevoJoystickHold",
                                                 "holdCompleted=true display=" + displayId
                                                         + " acquireMs=" + acquireMs
                                                         + " holdMs=" + safeHold);
                                     }
                                     @Override public void onCancelled(GestureDescription cancelled) {
+                                        joystickHoldInFlight.set(false);
                                         android.util.Log.e("RevoJoystickHold",
                                                 "holdCancelled=true display=" + displayId
                                                         + " acquireMs=" + acquireMs
                                                         + " holdMs=" + safeHold);
                                     }
                                 }, null);
+                        if (!accepted) joystickHoldInFlight.set(false);
                         android.util.Log.i("RevoJoystickHold",
                                 "continuationAccepted=" + accepted
                                         + " display=" + displayId
@@ -162,12 +199,21 @@ joystick = r'''    private static final long JOYSTICK_ACQUIRE_MS = 35L;
                                         + " holdMs=" + safeHold);
                     }
                     @Override public void onCancelled(GestureDescription cancelled) {
+                        joystickHoldInFlight.set(false);
                         android.util.Log.e("RevoJoystickHold",
                                 "acquireCancelled=true display=" + displayId
                                         + " acquireMs=" + acquireMs
                                         + " holdMs=" + safeHold);
                     }
                 }, null);
+        if (!acquireAccepted) {
+            joystickHoldInFlight.set(false);
+            android.util.Log.e("RevoJoystickHold",
+                    "acquireDispatchRejected=true display=" + displayId
+                            + " acquireMs=" + acquireMs
+                            + " holdMs=" + safeHold);
+        }
+        return acquireAccepted;
     }
 
     public boolean joystick(int displayId, float centerX, float centerY,
@@ -201,18 +247,23 @@ svc = replace_method(svc, 'joystickWithTimedTaps', r'''    public boolean joysti
 
 SERVICE.write_text(svc, encoding='utf-8')
 
-required = (
+required_service = (
     'JOYSTICK_ACQUIRE_MS = 35L',
+    'joystickHoldInFlight',
     'joystickHoldWithTaps',
     'new GestureDescription.StrokeDescription(acquirePath, 0, acquireMs, true)',
     'continueStroke(holdPath, 0, safeHold, false)',
     'continuationAccepted=',
     'holdCompleted=true',
 )
-missing = [item for item in required if item not in svc]
+missing = [item for item in required_service if item not in svc]
 if missing:
     raise SystemExit('full-deflection joystick hold patch incomplete: ' + repr(missing))
 if 'accessibility-joystick-hold-v2' not in router:
     raise SystemExit('router input-adaptation marker was not updated')
+if 'waiting:joystick-in-flight:' not in router:
+    raise SystemExit('router does not defer while a continued joystick is in flight')
+if 'waiting:joystick-in-flight' not in gather:
+    raise SystemExit('gather does not defer while a continued joystick is in flight')
 
-print('Patched v0.2.12 Android joystick to acquire then hold full deflection')
+print('Patched v0.2.12 Android joystick to serialize acquire/full-deflection holds')
