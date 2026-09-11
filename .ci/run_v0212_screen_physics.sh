@@ -46,6 +46,12 @@ probe() {
   sleep "$pause"
 }
 
+# Warm Android's first Accessibility gesture before taking timing measurements.
+probe warmup_250 right 250 1.0
+
+# Short holds matter for real e_lol gather steps, so measure them twice.
+probe right_50_a right 50 0.8
+probe right_50_b right 50 0.8
 probe right_100 right 100 0.8
 probe right_250 right 250 1.0
 probe right_500 right 500 1.2
