@@ -1,0 +1,230 @@
+name: Diagnose v0.9c pclntab metadata repair
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-pclntab-repair.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Download exact pinned Revolution binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache pcln-evidence
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
+
+      - name: Build pinned analysis tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check pefile
+          git clone --filter=blob:none https://github.com/mandiant/GoReSym.git .cache/GoReSym
+          git -C .cache/GoReSym checkout --detach 6fba10d77df98335cbd1fb7839043d1ffde8defb
+          test "$(git -C .cache/GoReSym rev-parse HEAD)" = '6fba10d77df98335cbd1fb7839043d1ffde8defb'
+          (cd .cache/GoReSym && go build -trimpath -o ../goresym .)
+
+      - name: Recover moduledata and create temporary pcHeader-magic candidates
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, struct
+          import pefile
+
+          src=Path('.cache/RevolutionMacro.exe')
+          raw=bytearray(src.read_bytes())
+          expected='0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb'
+          actual=hashlib.sha256(raw).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'input hash mismatch: {actual}')
+
+          pe=pefile.PE(str(src), fast_load=False)
+          base=int(pe.OPTIONAL_HEADER.ImageBase)
+          sections=[]
+          for s in pe.sections:
+              sections.append((int(s.VirtualAddress), int(s.SizeOfRawData), int(s.PointerToRawData)))
+
+          def va2off(va):
+              rva=va-base
+              if 0 <= rva < int(pe.OPTIONAL_HEADER.SizeOfHeaders): return rva
+              for srva,ssz,sraw in sections:
+                  if srva <= rva < srva+ssz: return sraw+(rva-srva)
+              return None
+          def q(o): return struct.unpack_from('<Q',raw,o)[0]
+
+          minpc=0x1400014a0
+          hits=[]
+          needle=struct.pack('<Q',minpc)
+          p=0
+          while True:
+              h=raw.find(needle,p)
+              if h < 0: break
+              md=h-160
+              if md >= 0 and md+184 <= len(raw):
+                  pc_header=q(md+0)
+                  funcname=q(md+8)
+                  pcln=q(md+104)
+                  ftab=q(md+128)
+                  n=q(md+136)
+                  cap=q(md+144)
+                  text=q(md+176)
+                  score=sum([
+                      text==minpc,
+                      1000<n<500000,
+                      cap>=n,
+                      va2off(pc_header) is not None,
+                      va2off(funcname) is not None,
+                      va2off(pcln) is not None,
+                      va2off(ftab) is not None,
+                  ])
+                  hits.append((score,md,pc_header,funcname,pcln,ftab,n,cap,text))
+              p=h+1
+          if not hits:
+              raise SystemExit('no moduledata candidate')
+          hits.sort(reverse=True)
+          score,md,pc_header,funcname,pcln,ftab,n,cap,text=hits[0]
+          if score < 7:
+              raise SystemExit(f'moduledata candidate insufficient score={score}')
+          pcoff=va2off(pc_header)
+          if pcoff is None:
+              raise SystemExit('pcHeader not file-backed')
+
+          report=[]
+          report.append(f'input_sha256={actual}')
+          report.append(f'image_base={base:#x}')
+          report.append(f'moduledata_file_offset={md:#x}')
+          report.append(f'moduledata_score={score}')
+          report.append(f'pcHeader_va={pc_header:#x}')
+          report.append(f'pcHeader_file_offset={pcoff:#x}')
+          report.append(f'funcnametab_va={funcname:#x}')
+          report.append(f'pclntable_va={pcln:#x}')
+          report.append(f'ftab_va={ftab:#x}')
+          report.append(f'ftab_len={n}')
+          report.append(f'text_minpc={text:#x}')
+          report.append('pcHeader_original_64=' + bytes(raw[pcoff:pcoff+64]).hex())
+          report.append('pcHeader_original_magic=' + bytes(raw[pcoff:pcoff+4]).hex())
+
+          candidates={
+              'go12':0xfffffffb,
+              'go116':0xfffffffa,
+              'go118':0xfffffff0,
+              'go120':0xfffffff1,
+          }
+          for label,magic in candidates.items():
+              patched=bytearray(raw)
+              struct.pack_into('<I',patched,pcoff,magic)
+              out=Path(f'.cache/RevolutionMacro-pcln-{label}.exe')
+              out.write_bytes(patched)
+              report.append(f'{label}_magic={magic:#x}')
+              report.append(f'{label}_sha256={hashlib.sha256(patched).hexdigest()}')
+
+          Path('pcln-evidence/moduledata.txt').write_text('\n'.join(report)+'\n',encoding='utf-8')
+          print('\n'.join(report))
+
+      - name: Probe repaired copies with GoReSym
+        shell: bash
+        run: |
+          set -u
+          mkdir -p pcln-evidence/probes
+          : > pcln-evidence/probe-status.txt
+          success=''
+
+          for label in go12 go116 go118 go120; do
+            exe=".cache/RevolutionMacro-pcln-${label}.exe"
+            out="pcln-evidence/probes/${label}-auto.json"
+            err="pcln-evidence/probes/${label}-auto.stderr.txt"
+            set +e
+            .cache/goresym -d -p "$exe" > "$out" 2> "$err"
+            rc=$?
+            set -e
+            echo "${label} auto rc=${rc}" | tee -a pcln-evidence/probe-status.txt
+            if [ "$rc" -eq 0 ] && [ -z "$success" ]; then success="${label}:auto"; fi
+          done
+
+          if [ -z "$success" ]; then
+            for label in go118 go120; do
+              exe=".cache/RevolutionMacro-pcln-${label}.exe"
+              for ver in 1.20 1.21 1.22 1.23 1.24 1.25 1.26; do
+                safe="${label}-v${ver}"
+                out="pcln-evidence/probes/${safe}.json"
+                err="pcln-evidence/probes/${safe}.stderr.txt"
+                set +e
+                .cache/goresym -d -p -v "$ver" "$exe" > "$out" 2> "$err"
+                rc=$?
+                set -e
+                echo "${safe} rc=${rc}" | tee -a pcln-evidence/probe-status.txt
+                if [ "$rc" -eq 0 ] && [ -z "$success" ]; then success="${label}:v${ver}"; fi
+              done
+            done
+          fi
+
+          echo "SUCCESS=${success}" | tee -a pcln-evidence/probe-status.txt
+          if [ -n "$success" ]; then
+            label="${success%%:*}"
+            mode="${success#*:}"
+            exe=".cache/RevolutionMacro-pcln-${label}.exe"
+            if [ "$mode" = auto ]; then
+              .cache/goresym -t -d -p -human "$exe" > pcln-evidence/goresym-human.txt 2> pcln-evidence/goresym-human.stderr.txt || true
+              .cache/goresym -t -d -p "$exe" > pcln-evidence/goresym-types.json 2> pcln-evidence/goresym-types.stderr.txt || true
+            else
+              ver="${mode#v}"
+              .cache/goresym -t -d -p -human -v "$ver" "$exe" > pcln-evidence/goresym-human.txt 2> pcln-evidence/goresym-human.stderr.txt || true
+              .cache/goresym -t -d -p -v "$ver" "$exe" > pcln-evidence/goresym-types.json 2> pcln-evidence/goresym-types.stderr.txt || true
+            fi
+          fi
+
+      - name: Surface movement-related type context
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('pcln-evidence/goresym-human.txt')
+          out=[]
+          if p.exists():
+              lines=p.read_text(encoding='utf-8',errors='replace').splitlines()
+              rx=re.compile(r'(?i)(pkg/common.*Macro|WatchMovement|StopMovement|MoveSpeed|UpdateSpeed|movement|buff|speed|WalkAlign|WalkAsync|\.Walk\b)')
+              hits=[i for i,x in enumerate(lines) if rx.search(x)]
+              covered=[]
+              for i in hits:
+                  if any(a<=i<b for a,b in covered): continue
+                  a=max(0,i-12); b=min(len(lines),i+28); covered.append((a,b))
+                  out.append(f'--- lines {a+1}-{b} ---')
+                  out.extend(lines[a:b])
+          else:
+              out.append('NO_GORESYM_TYPE_OUTPUT')
+          Path('pcln-evidence/relevant.txt').write_text('\n'.join(out)+'\n',encoding='utf-8')
+          print('\n'.join(out[:3000]))
+
+      - name: Upload pclntab evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-pclntab-repair
+          path: pcln-evidence/
+          if-no-files-found: error
+
+      - name: Assert repaired metadata is useful
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Eq '^SUCCESS=.+$' pcln-evidence/probe-status.txt
+          test -s pcln-evidence/goresym-human.txt
+          grep -Eq 'Macro|movement|speed|Walk' pcln-evidence/relevant.txt
