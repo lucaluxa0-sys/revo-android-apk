@@ -31,54 +31,42 @@ jobs:
             https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
           echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | sha256sum -c -
 
-      - name: Build exact pinned GoReSym
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --filter=blob:none https://github.com/mandiant/GoReSym.git .cache/GoReSym
-          git -C .cache/GoReSym checkout --detach 6fba10d77df98335cbd1fb7839043d1ffde8defb
-          test "$(git -C .cache/GoReSym rev-parse HEAD)" = '6fba10d77df98335cbd1fb7839043d1ffde8defb'
-          (cd .cache/GoReSym && go build -trimpath -o ../goresym .)
-          .cache/goresym -d -p .cache/RevolutionMacro.exe > lit-transform-evidence/goresym.json
-
       - name: Recover closure symbols and exact machine code
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
 
-          obj=json.loads(Path('lit-transform-evidence/goresym.json').read_text())
-          rows=[]
-          def walk(x):
-              if isinstance(x,dict):
-                  va=x.get('Start') or x.get('start') or x.get('Address') or x.get('address')
-                  name=x.get('FullName') or x.get('Name') or x.get('name')
-                  if isinstance(va,int) and 0x140a19d00 <= va < 0x140a1a300:
-                      rows.append((va,str(name),x))
-                  for v in x.values(): walk(v)
-              elif isinstance(x,list):
-                  for v in x: walk(v)
-          walk(obj)
-          rows.sort(key=lambda z:z[0])
-          with open('lit-transform-evidence/nearby-symbols.txt','w',encoding='utf-8') as f:
-              for va,name,x in rows:
-                  f.write(f'{va:#x} {name}\n')
-          print(Path('lit-transform-evidence/nearby-symbols.txt').read_text())
-          PY
+          go tool nm -sort address .cache/RevolutionMacro.exe \
+            > lit-transform-evidence/go-nm.txt
+          grep -Ei 'codec|walkStrings|EncodeValue|DecodeValue' \
+            lit-transform-evidence/go-nm.txt \
+            > lit-transform-evidence/codec-symbols.txt || true
+
+          go tool objdump -s 'codec' .cache/RevolutionMacro.exe \
+            > lit-transform-evidence/go-codec-objdump.txt || true
 
           objdump -d -M intel \
             --start-address=0x140a19d00 --stop-address=0x140a1a300 \
-            .cache/RevolutionMacro.exe > lit-transform-evidence/closure-disassembly.txt
+            .cache/RevolutionMacro.exe \
+            > lit-transform-evidence/closure-disassembly.txt
 
           grep -E '140a19e60|140a19ea0|140a19ee0|140a19f20|140a19f|140a1a0|call' \
             lit-transform-evidence/closure-disassembly.txt \
             > lit-transform-evidence/closure-key-lines.txt || true
 
           strings -a -t x -n 4 .cache/RevolutionMacro.exe | \
-            grep -E 'codec|walkStrings|EncodeValue|DecodeValue|xor|cipher' \
+            grep -Ei 'codec|walkStrings|EncodeValue|DecodeValue|xor|cipher' \
             > lit-transform-evidence/relevant-strings.txt || true
+
+          {
+            echo '===== CODEC SYMBOLS ====='
+            cat lit-transform-evidence/codec-symbols.txt
+            echo
+            echo '===== CLOSURE KEY LINES ====='
+            cat lit-transform-evidence/closure-key-lines.txt
+          } | tee lit-transform-evidence/summary.txt
+
+          test -s lit-transform-evidence/closure-disassembly.txt
 
       - name: Upload literal transform evidence
         if: always()
