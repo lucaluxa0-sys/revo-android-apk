@@ -23,18 +23,18 @@ jobs:
       - name: Download exact green phone-preview artifact
         uses: actions/download-artifact@v4
         with:
-          name: RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-bfc270a
+          name: RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-32e2adae19b4f75a06c0ff90031b5a9823524f53
           path: /tmp/v0212-preview
           repository: lucaluxa0-sys/revo-android-apk
-          run-id: 34579330668
+          run-id: 34720932362
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify exact bytes and publish uniquely named preview
         shell: bash
         run: |
           set -euo pipefail
-          NAME='RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-bfc270a.apk'
-          EXPECTED='ee095cf5dfc30a047a2a5df6e465c0af079be522248b0735d16d114d305ba011'
+          NAME='RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-32e2ada.apk'
+          EXPECTED='3e3ba6c57d8ac2bf6e460a1de5c2a63b00fc837e383a23d0b362e3edaedd340a'
           SRC="/tmp/v0212-preview/$NAME"
           test -s "$SRC"
           echo "$EXPECTED  $SRC" | sha256sum -c -
@@ -44,5 +44,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "$NAME"
-          git commit -m 'Publish v0.2.12 phone preview APK [skip ci]'
+          git commit -m 'Publish v0.2.12 phone preview 32e2ada APK [skip ci]'
           git push origin HEAD:main
