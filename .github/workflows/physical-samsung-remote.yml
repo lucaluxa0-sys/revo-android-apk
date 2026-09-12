@@ -76,12 +76,13 @@ jobs:
             --host "$PHONE_HOST" \
             "$COMMAND" | tee physical-test-output/command.json
 
-      - name: Capture immediate post-command state
+      - name: Capture and verify post-command engine state
         if: ${{ inputs.command != 'ping' && inputs.command != 'status' }}
         shell: bash
         env:
           REVO_PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
           PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+          COMMAND: ${{ inputs.command }}
         run: |
           set -euo pipefail
           sleep 2
@@ -92,6 +93,13 @@ jobs:
           python3 tools/revo-phone-agent-client.py \
             --host "$PHONE_HOST" \
             status | tee physical-test-output/status-after-10s.json
+          sleep 15
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            status | tee physical-test-output/status-after-25s.json
+          python3 tools/revo-phone-postflight.py \
+            "$COMMAND" \
+            physical-test-output/status-after-25s.json
 
       - name: Upload physical-control evidence
         if: always()
