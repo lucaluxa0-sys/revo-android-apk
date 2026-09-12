@@ -19,6 +19,8 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 import android.util.Log;
 
+import org.json.JSONObject;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -47,6 +49,10 @@ public final class RevoRemoteAgent {
     private static final String TAG = "RevoRemoteAgent";
     public static final int PORT = 38421;
     private static final long PAIR_WINDOW_MS = 10L * 60L * 1000L;
+    // startRemoteMacroWhenReady retries for up to ~20 seconds. Keep the remote
+    // transition locked slightly longer so two HTTP commands cannot stack while
+    // the UI bridge is still looking for a usable Start button.
+    private static final long COMMAND_TRANSITION_MS = 25L * 1000L;
     private static final String PREFS = "revo_remote_agent";
     private static final String TOKEN_KEY = "bearer_token_v1";
 
@@ -56,10 +62,27 @@ public final class RevoRemoteAgent {
     private final SecureRandom random = new SecureRandom();
     private final Object commandLock = new Object();
     private volatile boolean alive;
-    private volatile boolean remoteRunActive;
+    private volatile String remoteTransition = ""; // "starting" | "stopping" | ""
+    private volatile long remoteTransitionSince;
     private ServerSocket server;
     private final String pairingCode;
     private final long pairExpiresAt;
+
+    private static final class EngineSnapshot {
+        final boolean known;
+        final boolean running;
+        final boolean paused;
+        final String status;
+        final String raw;
+
+        EngineSnapshot(boolean known, boolean running, boolean paused, String status, String raw) {
+            this.known = known;
+            this.running = running;
+            this.paused = paused;
+            this.status = status == null ? "" : status;
+            this.raw = raw == null ? "" : raw;
+        }
+    }
 
     public RevoRemoteAgent(Context context, Hooks hooks) {
         this.context = context.getApplicationContext();
@@ -93,6 +116,63 @@ public final class RevoRemoteAgent {
     public void close() {
         alive = false;
         try { if (server != null) server.close(); } catch (Exception ignored) {}
+    }
+
+    private EngineSnapshot readEngineSnapshot() {
+        String raw;
+        try {
+            raw = hooks.status();
+        } catch (Exception e) {
+            return new EngineSnapshot(false, false, false, "ERROR:" + e.getClass().getSimpleName(), "");
+        }
+        if (raw == null || raw.trim().isEmpty() || "BRIDGE_NOT_READY".equals(raw)) {
+            return new EngineSnapshot(false, false, false, "BRIDGE_NOT_READY", raw);
+        }
+        try {
+            JSONObject json = new JSONObject(raw);
+            if (!json.has("running")) {
+                return new EngineSnapshot(false, false, false, "ENGINE_STATE_MISSING_RUNNING", raw);
+            }
+            boolean running = json.optBoolean("running", false);
+            boolean paused = json.optBoolean("paused", false);
+            String status = json.optString("status", running ? "Running" : "Stopped");
+            return new EngineSnapshot(true, running, paused, status, raw);
+        } catch (Exception e) {
+            return new EngineSnapshot(false, false, false, "ENGINE_STATE_PARSE_ERROR", raw);
+        }
+    }
+
+    private void beginTransition(String transition) {
+        remoteTransition = transition;
+        remoteTransitionSince = System.currentTimeMillis();
+    }
+
+    private void clearTransition() {
+        remoteTransition = "";
+        remoteTransitionSince = 0L;
+    }
+
+    private void reconcileTransition(EngineSnapshot state) {
+        String transition = remoteTransition;
+        if (transition.isEmpty()) return;
+        long age = Math.max(0L, System.currentTimeMillis() - remoteTransitionSince);
+        if ("starting".equals(transition) && state.known && state.running) {
+            clearTransition();
+            return;
+        }
+        if ("stopping".equals(transition) && state.known && !state.running) {
+            clearTransition();
+            return;
+        }
+        if (age >= COMMAND_TRANSITION_MS) {
+            Log.w(TAG, "clearing stale remote transition=" + transition + " ageMs=" + age +
+                    " engineKnown=" + state.known + " running=" + state.running);
+            clearTransition();
+        }
+    }
+
+    private boolean remoteActive(EngineSnapshot state) {
+        return (state.known && state.running) || "starting".equals(remoteTransition);
     }
 
     private void serve() {
@@ -150,40 +230,101 @@ public final class RevoRemoteAgent {
                 return;
             }
             if ("GET".equals(method) && "/v1/status".equals(path)) {
-                String state;
-                try { state = hooks.status(); }
-                catch (Exception e) { state = "ERROR:" + e.getClass().getSimpleName(); }
-                respond(s, 200, "{\"remoteRunActive\":" + remoteRunActive + ",\"engineState\":\"" + escape(state) + "\"}");
+                EngineSnapshot state;
+                synchronized (commandLock) {
+                    state = readEngineSnapshot();
+                    reconcileTransition(state);
+                }
+                respond(s, 200, "{\"remoteRunActive\":" + remoteActive(state) +
+                        ",\"engineKnown\":" + state.known +
+                        ",\"engineRunning\":" + state.running +
+                        ",\"enginePaused\":" + state.paused +
+                        ",\"transition\":\"" + escape(remoteTransition) + "\"" +
+                        ",\"engineStatus\":\"" + escape(state.status) + "\"" +
+                        ",\"engineState\":\"" + escape(state.raw) + "\"}");
                 return;
             }
             if ("POST".equals(method) && "/v1/start".equals(path)) {
                 synchronized (commandLock) {
-                    if (remoteRunActive) {
+                    EngineSnapshot state = readEngineSnapshot();
+                    reconcileTransition(state);
+                    if (!state.known) {
+                        respond(s, 503, json("error", "engine_state_unavailable"));
+                        return;
+                    }
+                    if (!remoteTransition.isEmpty()) {
+                        respond(s, 409, json("error", "command_in_progress"));
+                        return;
+                    }
+                    if (state.running && !state.paused) {
                         respond(s, 409, json("error", "already_running"));
                         return;
                     }
-                    hooks.start();
-                    remoteRunActive = true;
+                    beginTransition("starting");
+                    try {
+                        hooks.start();
+                    } catch (Exception e) {
+                        clearTransition();
+                        respond(s, 500, json("error", "start_failed"));
+                        return;
+                    }
                 }
                 respond(s, 202, json("accepted", "start"));
                 return;
             }
             if ("POST".equals(method) && "/v1/sunflower-e2e".equals(path)) {
                 synchronized (commandLock) {
-                    if (remoteRunActive) {
+                    EngineSnapshot state = readEngineSnapshot();
+                    reconcileTransition(state);
+                    if (!state.known) {
+                        respond(s, 503, json("error", "engine_state_unavailable"));
+                        return;
+                    }
+                    if (!remoteTransition.isEmpty()) {
+                        respond(s, 409, json("error", "command_in_progress"));
+                        return;
+                    }
+                    // The bounded Sunflower run mutates the active pattern before
+                    // pressing Start, so do not apply it on top of even a paused run.
+                    if (state.running) {
                         respond(s, 409, json("error", "already_running"));
                         return;
                     }
-                    hooks.sunflower();
-                    remoteRunActive = true;
+                    beginTransition("starting");
+                    try {
+                        hooks.sunflower();
+                    } catch (Exception e) {
+                        clearTransition();
+                        respond(s, 500, json("error", "sunflower_start_failed"));
+                        return;
+                    }
                 }
                 respond(s, 202, json("accepted", "sunflower-e2e"));
                 return;
             }
             if ("POST".equals(method) && "/v1/stop".equals(path)) {
                 synchronized (commandLock) {
-                    hooks.stop();
-                    remoteRunActive = false;
+                    EngineSnapshot state = readEngineSnapshot();
+                    reconcileTransition(state);
+                    if ("stopping".equals(remoteTransition)) {
+                        respond(s, 202, json("accepted", "stop-pending"));
+                        return;
+                    }
+                    if (state.known && !state.running && !"starting".equals(remoteTransition)) {
+                        clearTransition();
+                        respond(s, 200, json("status", "already_stopped"));
+                        return;
+                    }
+                    // Stop is intentionally allowed when engine state is unknown or
+                    // while Start is still settling: it only reduces control activity.
+                    beginTransition("stopping");
+                    try {
+                        hooks.stop();
+                    } catch (Exception e) {
+                        clearTransition();
+                        respond(s, 500, json("error", "stop_failed"));
+                        return;
+                    }
                 }
                 respond(s, 202, json("accepted", "stop"));
                 return;
@@ -242,7 +383,8 @@ public final class RevoRemoteAgent {
         byte[] payload = body.getBytes(StandardCharsets.UTF_8);
         String reason = code == 200 ? "OK" : code == 202 ? "Accepted" : code == 400 ? "Bad Request" :
                 code == 401 ? "Unauthorized" : code == 403 ? "Forbidden" : code == 404 ? "Not Found" :
-                code == 409 ? "Conflict" : code == 410 ? "Gone" : "Error";
+                code == 409 ? "Conflict" : code == 410 ? "Gone" : code == 500 ? "Internal Server Error" :
+                code == 503 ? "Service Unavailable" : "Error";
         String head = "HTTP/1.1 " + code + " " + reason + "\r\n" +
                 "Content-Type: application/json; charset=utf-8\r\n" +
                 "Content-Length: " + payload.length + "\r\n" +
@@ -354,4 +496,4 @@ if 'private void startRemoteMacroWhenReady' not in s:
     s = s.replace(stop_marker, remote_method + '\n' + stop_marker, 1)
 
 MAIN.write_text(s)
-print('PASS: installed authenticated RevoRemoteAgent on port 38421 with paired status/start/stop/Sunflower controls')
+print('PASS: installed authenticated RevoRemoteAgent on port 38421 with authoritative engine-state gating and paired status/start/stop/Sunflower controls')
