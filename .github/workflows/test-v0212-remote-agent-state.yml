@@ -6,6 +6,7 @@ on:
     paths:
       - 'tools/patch-native-v0212-remote-agent.py'
       - 'tools/verify-v0212-remote-agent-state.py'
+      - 'tools/verify-v0212-remote-agent-http.py'
       - '.github/workflows/test-v0212-remote-agent-state.yml'
   workflow_dispatch:
 
@@ -24,3 +25,5 @@ jobs:
           java-version: '17'
       - name: Verify authoritative remote state gate
         run: python3 tools/verify-v0212-remote-agent-state.py tools/patch-native-v0212-remote-agent.py
+      - name: Exercise authenticated localhost HTTP contract
+        run: python3 tools/verify-v0212-remote-agent-http.py tools/patch-native-v0212-remote-agent.py
