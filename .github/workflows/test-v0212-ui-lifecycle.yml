@@ -1,0 +1,30 @@
+name: Test Revo Android v0.2.12 UI lifecycle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test-v0212-ui-lifecycle.yml'
+      - 'tools/verify-v0212-ui-lifecycle.js'
+      - 'patches/android-backend-v0.2.10.js'
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify Android lifecycle bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check patches/android-backend-v0.2.10.js
+          node --check tools/verify-v0212-ui-lifecycle.js
+          node tools/verify-v0212-ui-lifecycle.js patches/android-backend-v0.2.10.js
