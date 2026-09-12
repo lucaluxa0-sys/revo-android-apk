@@ -1,4 +1,4 @@
-name: Test Revo Android v0.2.12 physical preflight
+name: Test Revo Android v0.2.12 physical preflight and postflight
 
 on:
   workflow_dispatch:
@@ -8,22 +8,29 @@ on:
       - '.github/workflows/test-v0212-physical-preflight.yml'
       - '.github/workflows/physical-samsung-remote.yml'
       - 'tools/revo-phone-preflight.py'
+      - 'tools/revo-phone-postflight.py'
       - 'tools/revo-phone-agent-client.py'
 
 permissions:
   contents: read
 
 jobs:
-  physical-preflight:
+  physical-state-gates:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Verify fail-closed physical preflight matrix
+      - name: Verify fail-closed physical command state matrices
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/revo-phone-preflight.py tools/revo-phone-agent-client.py
+          python3 -m py_compile \
+            tools/revo-phone-preflight.py \
+            tools/revo-phone-postflight.py \
+            tools/revo-phone-agent-client.py
           python3 tools/revo-phone-preflight.py --self-test
+          python3 tools/revo-phone-postflight.py --self-test
           grep -q 'python3 tools/revo-phone-preflight.py' .github/workflows/physical-samsung-remote.yml
           grep -q 'status-before.json' .github/workflows/physical-samsung-remote.yml
+          grep -q 'python3 tools/revo-phone-postflight.py' .github/workflows/physical-samsung-remote.yml
+          grep -q 'status-after-25s.json' .github/workflows/physical-samsung-remote.yml
