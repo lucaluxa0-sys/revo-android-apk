@@ -1,0 +1,85 @@
+name: Physical Samsung remote control
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Command to send to the paired Revo phone agent
+        required: true
+        type: choice
+        default: status
+        options:
+          - ping
+          - status
+          - start
+          - stop
+          - sunflower-e2e
+
+permissions:
+  contents: read
+
+jobs:
+  samsung:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate one-time configuration
+        shell: bash
+        env:
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+          TS_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PHONE_HOST" || { echo 'Missing repository variable REVO_PHONE_HOST'; exit 2; }
+          test -n "$TS_KEY" || { echo 'Missing repository secret TAILSCALE_AUTHKEY'; exit 2; }
+          if [ '${{ inputs.command }}' != 'ping' ]; then
+            test -n "$PHONE_TOKEN" || { echo 'Missing repository secret REVO_PHONE_TOKEN'; exit 2; }
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Join the private tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ vars.REVO_PHONE_HOST }}
+
+      - name: Send command to physical Samsung
+        id: command
+        shell: bash
+        env:
+          REVO_PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+          COMMAND: ${{ inputs.command }}
+        run: |
+          set -euo pipefail
+          mkdir -p physical-test-output
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            "$COMMAND" | tee physical-test-output/command.json
+
+      - name: Capture immediate post-command state
+        if: ${{ inputs.command != 'ping' && inputs.command != 'status' }}
+        shell: bash
+        env:
+          REVO_PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+        run: |
+          set -euo pipefail
+          sleep 2
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            status | tee physical-test-output/status-after-2s.json
+          sleep 8
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            status | tee physical-test-output/status-after-10s.json
+
+      - name: Upload physical-control evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: physical-samsung-${{ inputs.command }}-${{ github.run_id }}
+          path: physical-test-output/
+          if-no-files-found: warn
