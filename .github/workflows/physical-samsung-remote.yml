@@ -45,6 +45,41 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           ping: ${{ vars.REVO_PHONE_HOST }}
 
+      - name: Preflight movement-start commands against authoritative engine state
+        if: ${{ inputs.command == 'start' || inputs.command == 'sunflower-e2e' }}
+        shell: bash
+        env:
+          REVO_PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+          COMMAND: ${{ inputs.command }}
+        run: |
+          set -euo pipefail
+          mkdir -p physical-test-output
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            status | tee physical-test-output/status-before.json
+          python3 - "$COMMAND" physical-test-output/status-before.json <<'PY'
+          import json
+          import sys
+
+          command = sys.argv[1]
+          state = json.load(open(sys.argv[2], encoding='utf-8'))
+          if state.get('http_status') != 200:
+              raise SystemExit('Preflight failed: status request was not HTTP 200')
+          if state.get('engineKnown') is not True:
+              raise SystemExit('Preflight failed closed: phone does not expose authoritative engine state; install the current preview and retry status first')
+          running = state.get('engineRunning') is True
+          paused = state.get('enginePaused') is True
+          transition = str(state.get('transition') or '')
+          if transition:
+              raise SystemExit(f'Preflight failed closed: phone has command transition {transition!r}')
+          if command == 'sunflower-e2e' and running:
+              raise SystemExit('Preflight refused Sunflower: macro engine is already active')
+          if command == 'start' and running and not paused:
+              raise SystemExit('Preflight refused Start: macro engine is already running')
+          print(f'PASS: physical preflight command={command} running={running} paused={paused}')
+          PY
+
       - name: Send command to physical Samsung
         id: command
         shell: bash
