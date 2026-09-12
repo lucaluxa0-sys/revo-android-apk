@@ -1,0 +1,86 @@
+name: Probe physical Samsung read only
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/probe-physical-samsung-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  readonly-phone-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate read-only probe configuration
+        shell: bash
+        env:
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+          TS_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          test -n "$PHONE_HOST" || { echo 'Missing repository variable REVO_PHONE_HOST'; exit 2; }
+          test -n "$TS_KEY" || { echo 'Missing repository secret TAILSCALE_AUTHKEY'; exit 2; }
+
+      - uses: actions/checkout@v4
+
+      - name: Join private tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ vars.REVO_PHONE_HOST }}
+
+      - name: Ping Revo phone agent without authentication
+        shell: bash
+        env:
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p physical-probe-output
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            ping | tee physical-probe-output/ping.json
+
+      - name: Read authenticated authoritative engine status
+        shell: bash
+        env:
+          REVO_PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
+          PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p physical-probe-output
+          if [ -z "$REVO_PHONE_TOKEN" ]; then
+            printf '%s\n' '{"error":"missing_REVO_PHONE_TOKEN"}' | tee physical-probe-output/status.json
+            exit 3
+          fi
+          python3 tools/revo-phone-agent-client.py \
+            --host "$PHONE_HOST" \
+            status | tee physical-probe-output/status.json
+          python3 - physical-probe-output/status.json <<'PY'
+          import json
+          import sys
+          state=json.load(open(sys.argv[1],encoding='utf-8'))
+          if state.get('http_status') != 200:
+              raise SystemExit('Read-only probe failed: status was not HTTP 200')
+          if state.get('engineKnown') is not True:
+              raise SystemExit('Read-only probe failed: installed phone agent does not expose authoritative engine state')
+          if not isinstance(state.get('engineRunning'), bool) or not isinstance(state.get('enginePaused'), bool):
+              raise SystemExit('Read-only probe failed: malformed engine booleans')
+          if not isinstance(state.get('transition'), str):
+              raise SystemExit('Read-only probe failed: malformed transition field')
+          if state['enginePaused'] and not state['engineRunning']:
+              raise SystemExit('Read-only probe failed: impossible paused/stopped engine snapshot')
+          print('PASS: physical Samsung agent is reachable and authoritative status is readable; no control command sent')
+          print(f"engineRunning={state['engineRunning']} enginePaused={state['enginePaused']} transition={state['transition']!r}")
+          PY
+
+      - name: Upload read-only phone evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: physical-samsung-readonly-${{ github.run_id }}
+          path: physical-probe-output/
+          if-no-files-found: warn
