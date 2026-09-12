@@ -20,7 +20,6 @@ import android.util.Base64;
 import android.util.Log;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -262,11 +261,6 @@ AGENT.write_text(agent_source)
 
 manifest = MANIFEST.read_text()
 if 'android.permission.INTERNET' not in manifest:
-    manifest = manifest.replace(
-        '<manifest',
-        '<manifest',
-        1,
-    )
     manifest = re.sub(
         r'(<manifest[^>]*>)',
         r'\1\n    <uses-permission android:name="android.permission.INTERNET" />',
@@ -277,10 +271,11 @@ MANIFEST.write_text(manifest)
 
 s = MAIN.read_text()
 if 'RevoRemoteAgent remoteAgent' not in s:
-    oncreate = re.search(r'\n\s*@Override\s*\n\s*protected void onCreate\s*\(', s)
-    if not oncreate:
-        raise SystemExit('MainActivity onCreate anchor missing')
-    s = s[:oncreate.start()] + '\n    private RevoRemoteAgent remoteAgent;\n' + s[oncreate.start():]
+    class_anchor = re.search(r'(public\s+(?:final\s+)?class\s+MainActivity\b[^\{]*\{)', s)
+    if not class_anchor:
+        raise SystemExit('MainActivity class anchor missing')
+    insert_at = class_anchor.end()
+    s = s[:insert_at] + '\n    private RevoRemoteAgent remoteAgent;\n' + s[insert_at:]
 
 marker = '''        if (getIntent() != null && getIntent().getBooleanExtra("autostart", false)) {
             autostartWhenReady(0);
