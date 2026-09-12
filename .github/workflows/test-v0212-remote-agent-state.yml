@@ -1,0 +1,26 @@
+name: Test Revo Android v0.2.12 remote agent state
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/patch-native-v0212-remote-agent.py'
+      - 'tools/verify-v0212-remote-agent-state.py'
+      - '.github/workflows/test-v0212-remote-agent-state.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-agent-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify authoritative remote state gate
+        run: python3 tools/verify-v0212-remote-agent-state.py tools/patch-native-v0212-remote-agent.py
