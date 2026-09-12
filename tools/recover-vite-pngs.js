@@ -86,3 +86,5 @@ fs.writeFileSync(
   JSON.stringify({ count: recoveredNames.length, assets: recoveredNames }, null, 2)
 );
 console.log(`Wrote revo-png-manifest.json with ${recoveredNames.length} assets`);
+
+// Build trigger: refresh the v0.2.12 phone preview from current live main (2026-09-12).
