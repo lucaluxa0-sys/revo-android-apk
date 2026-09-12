@@ -1,0 +1,454 @@
+name: Recover v0.9c AI backend
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v09c-ai-recovery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Download exact v0.9c-hotfix3 executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache ai-evidence ai-evidence/disassembly ai-models
+          curl -fL --retry 4 --retry-delay 2 -o .cache/RevolutionMacro.exe \
+            https://github.com/nosyliam/revolution-macro/releases/download/v0.9c-hotfix3/RevolutionMacro.exe
+          echo '0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb  .cache/RevolutionMacro.exe' | tee ai-evidence/exe-sha256.expected.txt | sha256sum -c -
+          sha256sum .cache/RevolutionMacro.exe | tee ai-evidence/exe-sha256.actual.txt
+          file .cache/RevolutionMacro.exe | tee ai-evidence/exe-file.txt
+          go version -m .cache/RevolutionMacro.exe > ai-evidence/go-version-m.txt 2>&1 || true
+
+      - name: Pin public distribution repository at matching release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout --depth 1 --branch v0.9c-hotfix3 \
+            https://github.com/nosyliam/revolution-macro.git .cache/dist
+          git -C .cache/dist rev-parse HEAD | tee ai-evidence/distribution-tag-commit.txt
+          git -C .cache/dist ls-tree -r -l HEAD models | tee ai-evidence/model-inventory.txt
+          git -C .cache/dist ls-tree -r -l HEAD dependencies | tee ai-evidence/dependency-inventory.txt || true
+
+      - name: Recover exact Windows AI model assets from release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            models/v3/windows/loot_detection.bin
+            models/v3/windows/loot_detection.version
+            models/v3/windows/loot_detection_eco.bin
+            models/v3/windows/loot_detection_eco.version
+            models/v3/windows/sprinkler.bin
+            models/v3/windows/sprinkler.version
+            models/v3/windows/token_detection.bin
+            models/v3/windows/token_detection.version
+            models/v3/windows/token_detection_eco.bin
+            models/v3/windows/token_detection_eco.version
+            models/v3/windows/vic_detection.bin
+            models/v3/windows/vic_detection.version
+          )
+          for path in "${paths[@]}"; do
+            base="$(basename "$path")"
+            echo "recovering $path"
+            git -C .cache/dist show "HEAD:$path" > "ai-models/$base"
+          done
+          sha256sum ai-models/* | tee ai-evidence/model-sha256.txt
+          {
+            for f in ai-models/*.version; do
+              echo "===== $(basename "$f") ====="
+              cat "$f"
+              echo
+            done
+          } | tee ai-evidence/model-version-values.txt
+          {
+            for f in ai-models/*.bin; do
+              echo "===== $(basename "$f") ====="
+              file "$f"
+              xxd -l 96 "$f"
+            done
+          } | tee ai-evidence/model-headers.txt
+
+      - name: Build pinned GoReSym
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/mandiant/GoReSym.git .cache/GoReSym
+          git -C .cache/GoReSym checkout --detach 6fba10d77df98335cbd1fb7839043d1ffde8defb
+          test "$(git -C .cache/GoReSym rev-parse HEAD)" = '6fba10d77df98335cbd1fb7839043d1ffde8defb'
+          (cd .cache/GoReSym && go build -trimpath -o ../goresym .)
+          .cache/goresym -about > ai-evidence/goresym-about.txt
+
+      - name: Recover Go function/type metadata without hiding parser failures
+        shell: bash
+        run: |
+          set -u
+          set +e
+          .cache/goresym -d -p .cache/RevolutionMacro.exe \
+            > ai-evidence/goresym-base.json \
+            2> ai-evidence/goresym-base.stderr.txt
+          BASE_RC=$?
+          .cache/goresym -t -d -p .cache/RevolutionMacro.exe \
+            > ai-evidence/goresym-types.json \
+            2> ai-evidence/goresym-types.stderr.txt
+          TYPE_RC=$?
+          .cache/goresym -t -d -p -human .cache/RevolutionMacro.exe \
+            > ai-evidence/goresym-human.txt \
+            2> ai-evidence/goresym-human.stderr.txt
+          HUMAN_RC=$?
+          printf 'BASE_RC=%s\nTYPE_RC=%s\nHUMAN_RC=%s\n' "$BASE_RC" "$TYPE_RC" "$HUMAN_RC" | tee ai-evidence/goresym-status.txt
+          exit 0
+
+      - name: Extract ASCII and UTF-16 AI strings
+        shell: bash
+        run: |
+          set -euo pipefail
+          strings -a -t x -n 4 .cache/RevolutionMacro.exe > ai-evidence/strings-ascii-offsets.txt
+          strings -a -el -t x -n 4 .cache/RevolutionMacro.exe > ai-evidence/strings-utf16-offsets.txt || true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          rx = re.compile(r'(?i)(AI[ _-]?(gather|model|token|loot|detect|path)|AIGather|token_detection|loot_detection|sprinkler|vic_detection|onnx|tensor|inference|cuda|execution provider|fp16|float16|nms|non.?max|confidence|bounding|bbox|class(es)?|detector|overlay|precision|model ready|model failed|model loaded|monitor resolution|loot collection|token collection|bloom)')
+          out=[]
+          for name in ['strings-ascii-offsets.txt','strings-utf16-offsets.txt']:
+              p=Path('ai-evidence')/name
+              if not p.exists(): continue
+              for line in p.read_text(encoding='utf-8',errors='replace').splitlines():
+                  if rx.search(line): out.append(f'{name}: {line}')
+          Path('ai-evidence/strings-ai.txt').write_text('\n'.join(out)+'\n',encoding='utf-8')
+          print('\n'.join(out[:1000]))
+          PY
+
+      - name: Install static-analysis Python dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input pefile capstone onnx numpy
+
+      - name: Inspect exact ONNX model architecture and metadata
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, json, traceback
+          import onnx
+          from onnx import TensorProto
+
+          root=Path('ai-models')
+          out={}
+          for p in sorted(root.glob('*.bin')):
+              rec={
+                  'filename':p.name,
+                  'size':p.stat().st_size,
+                  'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
+                  'header_hex':p.read_bytes()[:64].hex(),
+              }
+              try:
+                  m=onnx.load(str(p), load_external_data=False)
+                  rec['onnx_parse']='ok'
+                  rec['ir_version']=int(m.ir_version)
+                  rec['producer_name']=m.producer_name
+                  rec['producer_version']=m.producer_version
+                  rec['domain']=m.domain
+                  rec['model_version']=int(m.model_version)
+                  rec['opset_imports']=[{'domain':o.domain,'version':int(o.version)} for o in m.opset_import]
+                  rec['metadata_props']={x.key:x.value for x in m.metadata_props}
+                  def vinfo(v):
+                      shape=[]
+                      tt=v.type.tensor_type
+                      if tt.HasField('shape'):
+                          for d in tt.shape.dim:
+                              if d.HasField('dim_value'): shape.append(int(d.dim_value))
+                              elif d.HasField('dim_param'): shape.append(d.dim_param)
+                              else: shape.append(None)
+                      return {'name':v.name,'elem_type':int(tt.elem_type),'shape':shape}
+                  rec['inputs']=[vinfo(v) for v in m.graph.input]
+                  rec['outputs']=[vinfo(v) for v in m.graph.output]
+                  ops={}
+                  for n in m.graph.node: ops[n.op_type]=ops.get(n.op_type,0)+1
+                  rec['operators']=dict(sorted(ops.items()))
+                  rec['node_count']=len(m.graph.node)
+                  rec['initializer_count']=len(m.graph.initializer)
+                  rec['initializers']=[{
+                      'name':t.name,
+                      'data_type':int(t.data_type),
+                      'dims':[int(x) for x in t.dims],
+                      'raw_bytes':len(t.raw_data),
+                  } for t in m.graph.initializer[:300]]
+              except Exception as e:
+                  rec['onnx_parse']='failed'
+                  rec['error']=repr(e)
+                  rec['traceback']=traceback.format_exc()
+              out[p.name]=rec
+          Path('ai-evidence/model-onnx-metadata.json').write_text(json.dumps(out,indent=2,sort_keys=True),encoding='utf-8')
+          lines=[]
+          for name,rec in out.items():
+              lines.append(f'===== {name} =====')
+              lines.append(f"sha256={rec['sha256']} size={rec['size']} onnx_parse={rec['onnx_parse']}")
+              if rec['onnx_parse']=='ok':
+                  lines.append('inputs='+json.dumps(rec['inputs']))
+                  lines.append('outputs='+json.dumps(rec['outputs']))
+                  lines.append('metadata='+json.dumps(rec['metadata_props'],sort_keys=True))
+                  lines.append('operators='+json.dumps(rec['operators'],sort_keys=True))
+              else:
+                  lines.append('error='+rec.get('error',''))
+              lines.append('')
+          Path('ai-evidence/model-onnx-summary.txt').write_text('\n'.join(lines),encoding='utf-8')
+          print('\n'.join(lines))
+
+      - name: Recover AI-specific Go metadata, string xrefs, and enclosing functions
+        shell: python
+        run: |
+          from pathlib import Path
+          import bisect, csv, json, re, struct
+          import pefile
+          from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+          from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP
+
+          EXE=Path('.cache/RevolutionMacro.exe')
+          ev=Path('ai-evidence')
+          data=EXE.read_bytes()
+          rx=re.compile(r'(?i)(AI[ _-]?(gather|model|token|loot|detect|path)|AIGather|token_detection|loot_detection|sprinkler|vic_detection|onnx|tensor|inference|cuda|execution provider|fp16|float16|nms|non.?max|confidence|bounding|bbox|detector|overlay|precision|model ready|model failed|model loaded|monitor resolution|loot collection|token collection|bloom)')
+          rx_types=re.compile(r'(?i)(AIGatheringConfig|TokenConfig|LootConfiguration|MondoLootPriority|RBCGather|DetectorManager|BagDetector|BattleDetector|EnemyDetector|FieldDetector|InteractionDetector|onnxruntime|token|loot|gather|model|detect|sprinkler|bloom|confidence|tensor|cuda)')
+
+          # Preserve high-signal contexts from any human type recovery that succeeded.
+          hp=ev/'goresym-human.txt'
+          if hp.exists():
+              lines=hp.read_text(encoding='utf-8',errors='replace').splitlines()
+              hits=[]
+              for i,line in enumerate(lines):
+                  if rx_types.search(line): hits.append(i)
+              spans=[]
+              for i in hits:
+                  lo=max(0,i-12); hi=min(len(lines),i+30)
+                  if spans and lo <= spans[-1][1]: spans[-1]=(spans[-1][0],max(spans[-1][1],hi))
+                  else: spans.append((lo,hi))
+              out=[]
+              for lo,hi in spans:
+                  out.append(f'===== lines {lo+1}-{hi} =====')
+                  out.extend(lines[lo:hi])
+              (ev/'goresym-ai-context.txt').write_text('\n'.join(out),encoding='utf-8')
+
+          # Generic extraction of function records from GoReSym JSON.
+          funcs=[]
+          base=ev/'goresym-base.json'
+          obj=None
+          if base.exists():
+              try: obj=json.loads(base.read_text(encoding='utf-8'))
+              except Exception: obj=None
+          def num(v):
+              if isinstance(v,int): return v
+              if isinstance(v,float): return int(v)
+              if isinstance(v,str):
+                  try: return int(v,0)
+                  except Exception: return None
+              return None
+          def walk(x,path='$'):
+              if isinstance(x,dict):
+                  name=None
+                  for k in ('FullName','Name','name','FuncName'):
+                      if isinstance(x.get(k),str) and x.get(k): name=x[k]; break
+                  start=None; end=None
+                  for k in ('Start','start','Entry','entry','VA','Address','address'):
+                      q=num(x.get(k))
+                      if q is not None: start=q; break
+                  for k in ('End','end','EndAddress','end_address'):
+                      q=num(x.get(k))
+                      if q is not None: end=q; break
+                  if name and start is not None:
+                      funcs.append({'name':name,'start':start,'end':end,'path':path})
+                  for k,v in x.items(): walk(v,path+'.'+str(k))
+              elif isinstance(x,list):
+                  for i,v in enumerate(x): walk(v,f'{path}[{i}]')
+          if obj is not None: walk(obj)
+          # Deduplicate and synthesize ends from sorted starts where absent.
+          fd={}
+          for f in funcs:
+              key=(f['name'],f['start'])
+              if key not in fd or (fd[key]['end'] is None and f['end'] is not None): fd[key]=f
+          funcs=sorted(fd.values(),key=lambda f:f['start'])
+          starts=[f['start'] for f in funcs]
+          for i,f in enumerate(funcs):
+              if not f['end'] or f['end'] <= f['start']:
+                  f['end']=funcs[i+1]['start'] if i+1<len(funcs) else f['start']+0x1000
+          (ev/'goresym-function-index.json').write_text(json.dumps(funcs,indent=2),encoding='utf-8')
+          ai_funcs=[f for f in funcs if rx_types.search(f['name'])]
+          (ev/'goresym-ai-functions.json').write_text(json.dumps(ai_funcs,indent=2),encoding='utf-8')
+
+          pe=pefile.PE(data=data,fast_load=False)
+          image_base=pe.OPTIONAL_HEADER.ImageBase
+          sections=[]
+          for s in pe.sections:
+              raw0=s.PointerToRawData; raw1=raw0+s.SizeOfRawData
+              va0=image_base+s.VirtualAddress
+              sections.append((raw0,raw1,va0,s.Name.rstrip(b'\\x00').decode(errors='replace')))
+          def offset_to_va(off):
+              for raw0,raw1,va0,name in sections:
+                  if raw0 <= off < raw1: return va0+(off-raw0),name
+              return None,None
+
+          # Extract printable strings with file offsets and map to VAs.
+          strings=[]
+          for m in re.finditer(rb'[ -~]{4,}',data):
+              txt=m.group().decode('ascii','replace')
+              if rx.search(txt):
+                  va,sec=offset_to_va(m.start())
+                  if va is not None:
+                      strings.append({'offset':m.start(),'va':va,'section':sec,'text':txt})
+          # Deduplicate exact VA/text.
+          ded={}
+          for s in strings: ded[(s['va'],s['text'])]=s
+          strings=sorted(ded.values(),key=lambda s:(s['va'],s['text']))
+          (ev/'ai-strings-va.json').write_text(json.dumps(strings,indent=2),encoding='utf-8')
+          target_by_va={s['va']:s for s in strings}
+
+          textsec=None
+          for s in pe.sections:
+              if s.Name.rstrip(b'\\x00')==b'.text': textsec=s; break
+          if textsec is None: raise SystemExit('No .text section')
+          code=textsec.get_data()
+          code_va=image_base+textsec.VirtualAddress
+          md=Cs(CS_ARCH_X86,CS_MODE_64); md.detail=True
+
+          def enclosing(va):
+              if not funcs: return None
+              i=bisect.bisect_right(starts,va)-1
+              if i>=0 and funcs[i]['start'] <= va < funcs[i]['end']: return funcs[i]
+              return None
+
+          xrefs=[]
+          for ins in md.disasm(code,code_va):
+              targets=[]
+              for op in ins.operands:
+                  if op.type==X86_OP_MEM and op.mem.base==X86_REG_RIP:
+                      targets.append(ins.address+ins.size+op.mem.disp)
+                  elif op.type==X86_OP_IMM:
+                      targets.append(op.imm & ((1<<64)-1))
+              for t in targets:
+                  s=target_by_va.get(t)
+                  if not s: continue
+                  f=enclosing(ins.address)
+                  xrefs.append({
+                      'instruction_va':ins.address,
+                      'mnemonic':ins.mnemonic,
+                      'op_str':ins.op_str,
+                      'string_va':t,
+                      'string':s['text'],
+                      'function':f['name'] if f else '',
+                      'function_start':f['start'] if f else None,
+                      'function_end':f['end'] if f else None,
+                  })
+          (ev/'ai-string-xrefs.json').write_text(json.dumps(xrefs,indent=2),encoding='utf-8')
+          with (ev/'ai-string-xrefs.csv').open('w',newline='',encoding='utf-8') as fp:
+              w=csv.DictWriter(fp,fieldnames=['instruction_va','mnemonic','op_str','string_va','string','function','function_start','function_end'])
+              w.writeheader(); w.writerows(xrefs)
+
+          # Candidate functions are direct AI-name matches plus functions containing high-signal string xrefs.
+          cands={(f['name'],f['start']):f for f in ai_funcs}
+          for x in xrefs:
+              if x['function'] and x['function_start'] is not None:
+                  f=enclosing(x['instruction_va'])
+                  if f: cands[(f['name'],f['start'])]=f
+          cands=sorted(cands.values(),key=lambda f:f['start'])
+          (ev/'ai-candidate-functions.json').write_text(json.dumps(cands,indent=2),encoding='utf-8')
+
+          # Function-scoped disassembly for the strongest candidates; keep evidence bounded.
+          def va_to_offset(va):
+              rva=va-image_base
+              try: return pe.get_offset_from_rva(rva)
+              except Exception: return None
+          manifest=[]
+          for idx,f in enumerate(cands[:160]):
+              start=f['start']; end=min(f['end'],start+0x20000)
+              off=va_to_offset(start)
+              if off is None or end<=start: continue
+              size=end-start
+              blob=data[off:off+size]
+              safe=re.sub(r'[^A-Za-z0-9_.-]+','_',f['name'])[-150:]
+              fn=ev/'disassembly'/f'{idx:03d}_{start:016x}_{safe}.txt'
+              rows=[f"FUNCTION {f['name']} start=0x{start:x} end=0x{f['end']:x}"]
+              for ins in md.disasm(blob,start):
+                  rows.append(f'0x{ins.address:016x}: {ins.mnemonic:<8} {ins.op_str}')
+              fn.write_text('\n'.join(rows)+'\n',encoding='utf-8')
+              manifest.append({'name':f['name'],'start':start,'end':f['end'],'file':str(fn.relative_to(ev))})
+          (ev/'disassembly-manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+
+          summary=[]
+          summary.append(f'functions_recovered={len(funcs)}')
+          summary.append(f'ai_named_function_candidates={len(ai_funcs)}')
+          summary.append(f'high_signal_strings={len(strings)}')
+          summary.append(f'high_signal_string_xrefs={len(xrefs)}')
+          summary.append(f'candidate_functions_total={len(cands)}')
+          summary.append(f'disassembled_candidates={len(manifest)}')
+          summary.append('')
+          summary.append('===== CANDIDATE FUNCTIONS =====')
+          for f in cands[:300]: summary.append(f"0x{f['start']:x}-0x{f['end']:x} {f['name']}")
+          summary.append('')
+          summary.append('===== STRING XREFS =====')
+          for x in xrefs[:1000]: summary.append(f"0x{x['instruction_va']:x} {x['function']} -> {x['string']!r}")
+          (ev/'AI_RECOVERY_SUMMARY.txt').write_text('\n'.join(summary)+'\n',encoding='utf-8')
+          print('\n'.join(summary[:1200]))
+
+      - name: Build machine-readable AI recovery manifest
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, json, os
+          ev=Path('ai-evidence')
+          files=[]
+          for p in sorted(ev.rglob('*')):
+              if p.is_file():
+                  files.append({
+                      'path':str(p.relative_to(ev)),
+                      'size':p.stat().st_size,
+                      'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
+                  })
+          obj={
+              'source_release':'v0.9c-hotfix3',
+              'source_exe_sha256':'0024099986d055e7de9f796a87ad6ab1b89b7004d087231f695c926f77fe8abb',
+              'model_family_at_release':'v3/windows',
+              'files':files,
+          }
+          (ev/'RECOVERY_MANIFEST.json').write_text(json.dumps(obj,indent=2),encoding='utf-8')
+
+      - name: Upload AI reverse-engineering evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-ai-recovery
+          path: ai-evidence/
+          if-no-files-found: error
+          compression-level: 6
+
+      - name: Upload exact release-tag Windows AI models
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revolution-v09c-ai-models-v3-windows
+          path: ai-models/
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Assert minimum useful recovery evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ai-evidence/model-inventory.txt
+          test -s ai-evidence/strings-ai.txt
+          test -s ai-evidence/AI_RECOVERY_SUMMARY.txt
+          grep -Eqi 'token_detection|loot_detection|AI.*(model|gather)|onnx|cuda' ai-evidence/strings-ai.txt
+          test -s ai-models/token_detection.bin
+          test -s ai-models/loot_detection.bin
