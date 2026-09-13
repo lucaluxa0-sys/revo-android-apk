@@ -20,4 +20,10 @@ End-to-end evidence: [GitHub Actions run 34416809503](https://github.com/lucalux
 
 v0.2.10's Gather selector repair remains included, so the real Pattern control still exposes the recovered Revolution pattern catalog. `e_lol` is currently the pattern with the narrow recovered native execution adapter. The full desktop Revolution decision/routine engine and generic execution for the other recovered Gather patterns are still under active recovery and are not complete.
 
+## v0.2.12 physical-phone preview testing
+
+v0.2.12 is still an **unpromoted phone preview**, not the published latest release. Physical Samsung validation uses a narrow authenticated on-device test agent over private Tailscale and must pass the read-only `ping -> status` gate before any movement command is considered.
+
+One-time setup and safety rules: [PHYSICAL_SAMSUNG_REMOTE_SETUP.md](PHYSICAL_SAMSUNG_REMOTE_SETUP.md)
+
 Older developer APKs remain in this repository for reference.
