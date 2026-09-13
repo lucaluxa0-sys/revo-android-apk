@@ -1,0 +1,102 @@
+name: Diagnose v0.2.12 Gather side navigation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v0212-gather-side-nav.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gather-side-nav:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Download exact fcf55c1 phone-preview artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1cc3cc86e0e499a7d170b4b8b6d13e3cb9
+          path: /tmp/v0212-fcf55c1
+          repository: lucaluxa0-sys/revo-android-apk
+          run-id: 34726199539
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact APK bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=/tmp/v0212-fcf55c1/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1.apk
+          EXPECTED=3081041fda623c1cdcdd3e34d8c2f058ed504abb3123df6588a2a5a9439bfbf7
+          test -s "$APK"
+          echo "$EXPECTED  $APK" | sha256sum -c -
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot Android 15 and map Gather-side pages without macro control
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            mkdir -p gather-side-nav-evidence
+            adb install -r /tmp/v0212-fcf55c1/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1.apk
+            adb shell pm clear com.revolution.android
+            adb shell settings put system accelerometer_rotation 0 || true
+            adb shell settings put system user_rotation 1 || true
+            adb shell wm size 2400x1080 || true
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee gather-side-nav-evidence/am-start.txt
+            sleep 20
+            adb exec-out screencap -p > gather-side-nav-evidence/page-0-default.png
+            adb shell uiautomator dump /sdcard/page-0-default.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/page-0-default.xml gather-side-nav-evidence/page-0-default.xml >/dev/null 2>&1 || true
+            adb shell input tap 73 299
+            sleep 2
+            adb exec-out screencap -p > gather-side-nav-evidence/page-1.png
+            adb shell uiautomator dump /sdcard/page-1.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/page-1.xml gather-side-nav-evidence/page-1.xml >/dev/null 2>&1 || true
+            adb shell input tap 73 425
+            sleep 2
+            adb exec-out screencap -p > gather-side-nav-evidence/page-2.png
+            adb shell uiautomator dump /sdcard/page-2.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/page-2.xml gather-side-nav-evidence/page-2.xml >/dev/null 2>&1 || true
+            adb shell input tap 73 551
+            sleep 2
+            adb exec-out screencap -p > gather-side-nav-evidence/page-3.png
+            adb shell uiautomator dump /sdcard/page-3.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/page-3.xml gather-side-nav-evidence/page-3.xml >/dev/null 2>&1 || true
+            echo 'diagnostic=v0212-gather-side-nav' > gather-side-nav-evidence/PROVENANCE.txt
+            echo 'apk_commit=fcf55c1cc3cc86e0e499a7d170b4b8b6d13e3cb9' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'apk_sha256=3081041fda623c1cdcdd3e34d8c2f058ed504abb3123df6588a2a5a9439bfbf7' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'app_data=cleared_before_launch' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'interaction=navigation-only' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'start_button=not_pressed' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'accessibility=not_enabled_by_workflow' >> gather-side-nav-evidence/PROVENANCE.txt
+            echo 'roblox=not_launched_by_workflow' >> gather-side-nav-evidence/PROVENANCE.txt
+            test -s gather-side-nav-evidence/page-3.png
+            echo 'PASS: captured all four Gather side-navigation pages without macro control'
+
+      - name: Upload Gather-side navigation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0212-gather-side-nav-${{ github.run_id }}
+          path: gather-side-nav-evidence/
+          if-no-files-found: warn
