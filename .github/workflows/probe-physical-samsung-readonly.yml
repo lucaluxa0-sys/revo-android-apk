@@ -20,10 +20,26 @@ jobs:
         env:
           PHONE_HOST: ${{ vars.REVO_PHONE_HOST }}
           TS_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          PHONE_TOKEN: ${{ secrets.REVO_PHONE_TOKEN }}
         run: |
           set -euo pipefail
+          mkdir -p physical-probe-output
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          state = {
+              'has_REVO_PHONE_HOST': bool(os.environ.get('PHONE_HOST')),
+              'has_TAILSCALE_AUTHKEY': bool(os.environ.get('TS_KEY')),
+              'has_REVO_PHONE_TOKEN': bool(os.environ.get('PHONE_TOKEN')),
+          }
+          Path('physical-probe-output/config.json').write_text(json.dumps(state, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(state, sort_keys=True))
+          PY
           test -n "$PHONE_HOST" || { echo 'Missing repository variable REVO_PHONE_HOST'; exit 2; }
           test -n "$TS_KEY" || { echo 'Missing repository secret TAILSCALE_AUTHKEY'; exit 2; }
+          test -n "$PHONE_TOKEN" || { echo 'Missing repository secret REVO_PHONE_TOKEN'; exit 2; }
 
       - uses: actions/checkout@v4
 
@@ -52,10 +68,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p physical-probe-output
-          if [ -z "$REVO_PHONE_TOKEN" ]; then
-            printf '%s\n' '{"error":"missing_REVO_PHONE_TOKEN"}' | tee physical-probe-output/status.json
-            exit 3
-          fi
           python3 tools/revo-phone-agent-client.py \
             --host "$PHONE_HOST" \
             status | tee physical-probe-output/status.json
