@@ -1,0 +1,26 @@
+name: Test Revo Android v0.2.12 startup state
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patches/android-wails-shim-v0.2.4.js'
+      - 'tools/verify-v0212-startup-state.py'
+      - '.github/workflows/test-v0212-startup-state.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  startup-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Android bootstrap cannot enable user settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/verify-v0212-startup-state.py
+          python3 tools/verify-v0212-startup-state.py patches/android-wails-shim-v0.2.4.js --self-test
