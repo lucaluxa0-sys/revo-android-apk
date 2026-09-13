@@ -39,7 +39,6 @@ jobs:
           PY
           test -n "$PHONE_HOST" || { echo 'Missing repository variable REVO_PHONE_HOST'; exit 2; }
           test -n "$TS_KEY" || { echo 'Missing repository secret TAILSCALE_AUTHKEY'; exit 2; }
-          test -n "$PHONE_TOKEN" || { echo 'Missing repository secret REVO_PHONE_TOKEN'; exit 2; }
 
       - uses: actions/checkout@v4
 
@@ -68,6 +67,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p physical-probe-output
+          if [ -z "$REVO_PHONE_TOKEN" ]; then
+            printf '%s\n' '{"error":"missing_REVO_PHONE_TOKEN_after_successful_ping"}' | tee physical-probe-output/status.json
+            echo 'Phone ping succeeded, but repository secret REVO_PHONE_TOKEN is missing.'
+            exit 3
+          fi
           python3 tools/revo-phone-agent-client.py \
             --host "$PHONE_HOST" \
             status | tee physical-probe-output/status.json
