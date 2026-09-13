@@ -1,0 +1,120 @@
+name: Diagnose v0.2.12 clean startup UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/diag-v0212-clean-startup-ui.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  clean-startup-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Download exact fcf55c1 phone-preview artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1cc3cc86e0e499a7d170b4b8b6d13e3cb9
+          path: /tmp/v0212-fcf55c1
+          repository: lucaluxa0-sys/revo-android-apk
+          run-id: 34726199539
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact APK bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=/tmp/v0212-fcf55c1/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1.apk
+          EXPECTED=3081041fda623c1cdcdd3e34d8c2f058ed504abb3123df6588a2a5a9439bfbf7
+          test -s "$APK"
+          echo "$EXPECTED  $APK" | sha256sum -c -
+          unzip -p "$APK" assets/www/android-wails-shim.js > /tmp/exact-fcf55c1-shim.js
+          grep -q '\[android-backend\] v0.2.12 lifecycle bridge installed' /tmp/exact-fcf55c1-shim.js
+          echo 'PASS: diagnostic will run the exact previously-built fcf55c1 APK'
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot clean Android 15 and capture untouched Revolution startup UI
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            APK=/tmp/v0212-fcf55c1/RevolutionMacro-Android-v0.2.12-PHONE-PREVIEW-fcf55c1.apk
+            OUT=clean-startup-ui-evidence
+            mkdir -p "$OUT"
+
+            adb install -r "$APK"
+            adb shell pm clear com.revolution.android
+            adb shell settings put system accelerometer_rotation 0 || true
+            adb shell settings put system user_rotation 1 || true
+            adb shell wm size 2400x1080 || true
+            adb logcat -c
+
+            # Launch Revolution only. Do not enable Accessibility, press Start,
+            # launch Roblox, or call any remote-control endpoint.
+            adb shell am force-stop com.revolution.android || true
+            adb shell am start -W -n com.revolution.android/.MainActivity | tee "$OUT/am-start.txt"
+
+            sleep 8
+            adb exec-out screencap -p > "$OUT/startup-08s.png"
+            adb shell uiautomator dump /sdcard/revo-startup-08s.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/revo-startup-08s.xml "$OUT/startup-08s.xml" >/dev/null 2>&1 || true
+
+            sleep 12
+            adb exec-out screencap -p > "$OUT/startup-20s.png"
+            adb shell uiautomator dump /sdcard/revo-startup-20s.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/revo-startup-20s.xml "$OUT/startup-20s.xml" >/dev/null 2>&1 || true
+
+            sleep 15
+            adb exec-out screencap -p > "$OUT/startup-35s.png"
+            adb shell uiautomator dump /sdcard/revo-startup-35s.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/revo-startup-35s.xml "$OUT/startup-35s.xml" >/dev/null 2>&1 || true
+
+            adb shell dumpsys window windows > "$OUT/windows.txt" || true
+            adb shell dumpsys activity activities > "$OUT/activities.txt" || true
+            adb logcat -d -v time > "$OUT/logcat.txt"
+            sha256sum "$APK" > "$OUT/exact-apk-sha256.txt"
+            printf '%s\n' \
+              'diagnostic=clean-v0212-startup-ui' \
+              'apk_commit=fcf55c1cc3cc86e0e499a7d170b4b8b6d13e3cb9' \
+              'apk_sha256=3081041fda623c1cdcdd3e34d8c2f058ed504abb3123df6588a2a5a9439bfbf7' \
+              'api=35' \
+              'profile=pixel_6' \
+              'app_data=cleared_before_launch' \
+              'accessibility=not_enabled_by_workflow' \
+              'start_button=not_pressed' \
+              'roblox=not_installed_or_launched_by_workflow' \
+              'remote_control_endpoint=not_called' \
+              > "$OUT/PROVENANCE.txt"
+
+            grep -q 'com.revolution.android' "$OUT/am-start.txt"
+            test -s "$OUT/startup-35s.png"
+            echo 'PASS: captured untouched clean-install Revolution UI on Android 15 without macro control'
+
+      - name: Upload clean-startup UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: revo-v0212-clean-startup-ui-${{ github.run_id }}
+          path: clean-startup-ui-evidence/
+          if-no-files-found: warn
