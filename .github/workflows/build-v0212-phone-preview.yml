@@ -8,6 +8,7 @@ on:
       - '.github/workflows/build-v0212-phone-preview.yml'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-mobile-hive-prompt.py'
       - 'tools/patch-native-v0212-claimed-hive-override.py'
       - 'tools/patch-native-v0212-camera-preflight.py'
       - 'tools/patch-native-v0212-field-routing.py'
@@ -74,6 +75,7 @@ jobs:
           unzip -q /tmp/source.zip
           python3 tools/patch-native-v0211-bee-swarm-launch.py
           python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-mobile-hive-prompt.py
           python3 tools/patch-native-v0212-field-routing.py
           python3 tools/patch-native-v0212-template-contrast.py
           python3 tools/patch-native-v0212-remote-agent.py
@@ -82,6 +84,7 @@ jobs:
           python3 -m py_compile \
             tools/patch-native-v0211-bee-swarm-launch.py \
             tools/patch-native-v0212-hive-routing.py \
+            tools/patch-native-v0212-mobile-hive-prompt.py \
             tools/patch-native-v0212-claimed-hive-override.py \
             tools/patch-native-v0212-camera-preflight.py \
             tools/patch-native-v0212-field-routing.py \
