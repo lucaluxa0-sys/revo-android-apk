@@ -17,6 +17,7 @@ on:
       - 'tools/patch-native-v0212-template-core.py'
       - 'tools/patch-native-v0212-joystick-hold.py'
       - 'tools/patch-native-v0212-joystick-callback-thread.py'
+      - 'tools/patch-native-v0212-jump-after-acquire.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
       - 'tools/patch-revo-frontend-v028.py'
@@ -81,6 +82,7 @@ jobs:
           python3 tools/patch-native-v0212-remote-agent.py
           python3 tools/patch-native-v0212-claimed-hive-override.py
           python3 tools/patch-native-v0212-camera-preflight.py
+          python3 tools/patch-native-v0212-jump-after-acquire.py
           python3 -m py_compile \
             tools/patch-native-v0211-bee-swarm-launch.py \
             tools/patch-native-v0212-hive-routing.py \
@@ -93,6 +95,7 @@ jobs:
             tools/patch-native-v0212-template-core.py \
             tools/patch-native-v0212-joystick-hold.py \
             tools/patch-native-v0212-joystick-callback-thread.py \
+            tools/patch-native-v0212-jump-after-acquire.py \
             tools/patch-native-v0212-joystick-prequeue-continuation.py \
             tools/patch-native-v0212-movement-speed.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
