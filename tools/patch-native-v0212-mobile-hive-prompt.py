@@ -128,5 +128,17 @@ new='''        if (now - lastSearchAtMs < FRAME_SEARCH_INTERVAL_MS) return null;
 '''
 once(old,new,"findAny mobile dispatch")
 
+once(
+    "    private static final long SLOT_TIMEOUT_MS = 7_500;
+",
+    "    // Android screenshot delivery on emulators/phones can be much slower than desktop frame polling.
+"
+    "    // Keep desktop geometry, but allow enough time to observe the next mobile proximity prompt.
+"
+    "    private static final long SLOT_TIMEOUT_MS = 15_000;
+",
+    "mobile hive timeout adaptation")
+
+
 p.write_text(s)
 print("PASS: Android mobile hive Tap/Claim detector installed")
