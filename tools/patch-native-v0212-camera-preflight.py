@@ -70,6 +70,20 @@ once(
 "stop preflight")
 
 once(
+'''        long captureNowMs = SystemClock.elapsedRealtime();
+        if (captureInFlight.get()) {
+''',
+'''        long captureNowMs = SystemClock.elapsedRealtime();
+        // Do not begin a screenshot while a camera-setting gesture is still
+        // settling. Screenshot callbacks can arrive much later than capture
+        // time, so gating only in onFrame() can feed stale UI pixels into the
+        // preflight and skip straight past Classic.
+        if (!routeStarted && captureNowMs < cameraPreflightNextAtMs) return;
+        if (captureInFlight.get()) {
+''',
+"preflight capture settle gate")
+
+once(
 '''    private void onFrame(Bitmap frame) {
         if (routing.onFrame(frame)) gather.onFrame(frame);
     }
@@ -108,7 +122,7 @@ once(
                 // Open Roblox menu.
                 svc.tap(displayId, w * 0.0604167f, h * 0.0962963f, 35);
                 cameraPreflightState = CameraPreflightState.OPEN_SETTINGS;
-                cameraPreflightNextAtMs = now + 300;
+                cameraPreflightNextAtMs = now + 350;
                 status = "Camera preflight: opening settings";
                 return false;
 
@@ -117,7 +131,7 @@ once(
                 // Settings tab in Roblox's mobile menu.
                 svc.tap(displayId, w * 0.3229167f, h * 0.2444444f, 35);
                 cameraPreflightState = CameraPreflightState.SEEK_CLASSIC;
-                cameraPreflightNextAtMs = now + 450;
+                cameraPreflightNextAtMs = now + 500;
                 status = "Camera preflight: checking camera mode";
                 return false;
 
@@ -141,7 +155,7 @@ once(
                 // Camera Mode right-arrow. Cycle until explicit "Classic" is visible.
                 svc.tap(displayId, w * 0.9083333f, h * 0.4314815f, 35);
                 cameraPreflightTaps++;
-                cameraPreflightNextAtMs = now + 300;
+                cameraPreflightNextAtMs = now + 450;
                 status = "Camera preflight: cycling mode " + cameraPreflightTaps;
                 return false;
 
