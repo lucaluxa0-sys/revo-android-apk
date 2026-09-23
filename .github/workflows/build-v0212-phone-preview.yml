@@ -8,6 +8,7 @@ on:
       - '.github/workflows/build-v0212-phone-preview.yml'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
       - 'tools/patch-native-v0212-hive-routing.py'
+      - 'tools/patch-native-v0212-claimed-hive-override.py'
       - 'tools/patch-native-v0212-field-routing.py'
       - 'tools/patch-native-v0212-remote-agent.py'
       - 'tools/patch-native-v0212-template-contrast.py'
@@ -63,9 +64,11 @@ jobs:
           python3 tools/patch-native-v0212-field-routing.py
           python3 tools/patch-native-v0212-template-contrast.py
           python3 tools/patch-native-v0212-remote-agent.py
+          python3 tools/patch-native-v0212-claimed-hive-override.py
           python3 -m py_compile \
             tools/patch-native-v0211-bee-swarm-launch.py \
             tools/patch-native-v0212-hive-routing.py \
+            tools/patch-native-v0212-claimed-hive-override.py \
             tools/patch-native-v0212-field-routing.py \
             tools/patch-native-v0212-remote-agent.py \
             tools/patch-native-v0212-template-contrast.py \
