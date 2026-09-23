@@ -48,6 +48,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore stable Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: revo-android-debug-keystore-v1
         with:
           gradle-version: '8.13'
       - uses: android-actions/setup-android@v3
