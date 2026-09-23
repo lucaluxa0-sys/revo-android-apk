@@ -23,14 +23,14 @@ once(
         WAIT_ROBLOX, OPEN_SETTINGS, SEEK_CLASSIC, CLOSE_MENU, DONE, FAILED
     }
 
-    // Binary mask of the word "Classic" from Roblox mobile's Camera Mode row.
-    // Reference crop: x=585..704, y=214..251 on a 960x540 viewport.
+    // Bright reference pixels from the word "Classic" in Roblox mobile's
+    // Camera Mode row. Direct coordinates are deliberately used instead of a
+    // packed bitset so the detector is auditable and cannot suffer bit-order
+    // encoding mistakes.
     private static final int CAMERA_REF_W = 120;
     private static final int CAMERA_REF_H = 38;
-    private static final int CAMERA_REF_ON_PIXELS = 104;
-    private static final byte[] CAMERA_CLASSIC_MASK = android.util.Base64.decode(
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzIAAAAAAAAAAAAAAAAABBIAAAAAAAAAAAAAAAAACAI4OHEOAAAAAAAAAAAACAJERIkRAAAAAAAAAAAACAICQIEgAAAAAAAAAAAACAIeIEEgAAAAAAAAAAAACAJCDBkgAAAAAAAAAAAADAJCBAkgAAAAAAAAAAAABhJGRIkxAAAAAAAAAAAAAeI6OHEOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            android.util.Base64.DEFAULT);
+    private static final int[] CAMERA_CLASSIC_X = new int[] {42,43,46,47,50,41,47,50,40,50,54,55,56,62,63,64,69,70,71,75,80,81,82,40,50,53,57,61,65,68,72,75,79,83,40,50,58,61,68,75,78,40,50,55,56,57,58,62,69,75,78,40,50,53,58,64,65,71,72,75,78,40,41,50,53,58,65,72,75,78,41,42,47,50,53,57,58,61,65,68,72,75,78,79,83,43,44,45,46,50,54,55,56,58,62,63,64,69,70,71,75,80,81,82};
+    private static final int[] CAMERA_CLASSIC_Y = new int[] {15,15,15,15,15,16,16,16,17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,18,18,18,18,18,18,18,18,18,18,18,19,19,19,19,19,19,19,20,20,20,20,20,20,20,20,20,20,21,21,21,21,21,21,21,21,21,21,22,22,22,22,22,22,22,22,22,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24};
 
     private volatile CameraPreflightState cameraPreflightState = CameraPreflightState.DONE;
     private volatile long cameraPreflightNextAtMs = 0;
@@ -184,27 +184,22 @@ once(
         final int cropH = Math.max(1, Math.round(fh * 0.0703704f));
 
         int matched = 0;
-        for (int ry = 0; ry < CAMERA_REF_H; ry++) {
-            for (int rx = 0; rx < CAMERA_REF_W; rx++) {
-                int refIndex = ry * CAMERA_REF_W + rx;
-                int maskByte = CAMERA_CLASSIC_MASK[refIndex >> 3] & 0xff;
-                int maskBit = 7 - (refIndex & 7);
-                if (((maskByte >> maskBit) & 1) == 0) continue;
+        for (int i = 0; i < CAMERA_CLASSIC_X.length; i++) {
+            int rx = CAMERA_CLASSIC_X[i];
+            int ry = CAMERA_CLASSIC_Y[i];
+            int x = left + Math.min(cropW - 1, (rx * cropW) / CAMERA_REF_W);
+            int y = top + Math.min(cropH - 1, (ry * cropH) / CAMERA_REF_H);
+            x = Math.max(0, Math.min(fw - 1, x));
+            y = Math.max(0, Math.min(fh - 1, y));
 
-                int x = left + Math.min(cropW - 1, (rx * cropW) / CAMERA_REF_W);
-                int y = top + Math.min(cropH - 1, (ry * cropH) / CAMERA_REF_H);
-                x = Math.max(0, Math.min(fw - 1, x));
-                y = Math.max(0, Math.min(fh - 1, y));
-
-                int pixel = frame.getPixel(x, y);
-                int r = (pixel >> 16) & 0xff;
-                int g = (pixel >> 8) & 0xff;
-                int b = pixel & 0xff;
-                if (Math.min(r, Math.min(g, b)) >= 175) matched++;
-            }
+            int pixel = frame.getPixel(x, y);
+            int r = (pixel >> 16) & 0xff;
+            int g = (pixel >> 8) & 0xff;
+            int b = pixel & 0xff;
+            if (Math.min(r, Math.min(g, b)) >= 175) matched++;
         }
-        // Reference experiments: Classic=104/104, Follow~25/104,
-        // Default(Follow)~19/104. Leave generous anti-aliasing headroom.
+        // Measured on real 960x540 BlueStacks frames:
+        // Follow=0/104, Classic=104/104, Default(Follow)=19/104.
         return matched >= 76;
     }
 
