@@ -119,10 +119,18 @@ once(
 
         switch (cameraPreflightState) {
             case WAIT_ROBLOX:
-                // Open Roblox menu.
+                // Roblox can report foreground before its resumed surface is
+                // actually ready to receive Accessibility gestures. Give the
+                // client one settled frame window before opening the menu.
+                if (cameraPreflightNextAtMs == 0) {
+                    cameraPreflightNextAtMs = now + 900;
+                    status = "Camera preflight: settling Roblox";
+                    return false;
+                }
+                if (now < cameraPreflightNextAtMs) return false;
                 svc.tap(displayId, w * 0.0604167f, h * 0.0962963f, 35);
                 cameraPreflightState = CameraPreflightState.OPEN_SETTINGS;
-                cameraPreflightNextAtMs = now + 350;
+                cameraPreflightNextAtMs = now + 500;
                 status = "Camera preflight: opening settings";
                 return false;
 
