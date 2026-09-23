@@ -128,6 +128,30 @@ new='''        if (now - lastSearchAtMs < FRAME_SEARCH_INTERVAL_MS) return null;
 '''
 once(old,new,"findAny mobile dispatch")
 
+old_center = """                if (m != null) {
+                    lastMatch = m;
+                    if (move(frame, svc, c, Direction.BACKWARD, 2.0, "desktop ClaimHive: Backward 2")) {
+                        transitionAfterGesture(State.BACK_OFF_INITIAL);
+                    }
+                } else {
+"""
+new_center = """                if (m != null) {
+                    lastMatch = m;
+                    // Mobile Claim Hive is already a definitive proximity prompt.
+                    // Claim it while it is visible; backing away first makes the
+                    // Android prompt disappear and falsely looks occupied.
+                    if ("claimhive".equals(m.name)) {
+                        claimedHive = 3;
+                        if (tapInteraction(frame, svc, c, m, "mobile Tap: claim center hive")) {
+                            transitionDelay(State.CLAIM_CENTER_WAIT, 450);
+                        }
+                    } else if (move(frame, svc, c, Direction.BACKWARD, 2.0, "desktop ClaimHive: Backward 2")) {
+                        transitionAfterGesture(State.BACK_OFF_INITIAL);
+                    }
+                } else {
+"""
+once(old_center,new_center,"mobile direct center claim")
+
 once(
 '''    private static final long SLOT_TIMEOUT_MS = 7_500;
 ''',
