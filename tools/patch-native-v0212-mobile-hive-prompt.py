@@ -189,22 +189,32 @@ move_helper='''    // Tiny proximity-search motions need a longer touch hold on 
     private boolean moveMobileProbe(Bitmap frame, RevoAccessibilityService svc, Config c,
                                     Direction d, double studs, long minimumDurationMs, String label) {
         long now = SystemClock.elapsedRealtime();
-        long duration = RevoMovementSpeed.durationMs(
+        long nominalDuration = RevoMovementSpeed.durationMs(
                 studs, c.baseMoveSpeed, c.msPerStud,
                 c.hasteStacks, c.hastePlus, c.coconutHaste, c.bearMorph, c.oil, c.superSmoothie,
                 MAX_GESTURE_MS);
-        duration = Math.max(minimumDurationMs, duration);
+        long duration = Math.max(minimumDurationMs, nominalDuration);
+        // Android needs a longer contact window for reliable tiny joystick gestures.
+        // Preserve the requested desktop distance by reducing stick deflection in the
+        // same ratio that the contact time was extended. Example at MoveSpeed 24:
+        // 1.25 studs ~=52 ms nominal; 250 ms contact => ~0.21 joystick radius.
+        float deflectionScale = duration > 0L
+                ? Math.max(0.05f, Math.min(1.0f, (float)nominalDuration / (float)duration))
+                : 1.0f;
         float w = frame.getWidth(), h = frame.getHeight();
         float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY), r = (float)(Math.min(w, h) * c.joyR);
+        float probeR = r * deflectionScale;
         float tx = cx, ty = cy;
         switch (d) {
-            case FORWARD: ty -= r; break;
-            case BACKWARD: ty += r; break;
-            case LEFT: tx -= r; break;
-            case RIGHT: tx += r; break;
+            case FORWARD: ty -= probeR; break;
+            case BACKWARD: ty += probeR; break;
+            case LEFT: tx -= probeR; break;
+            case RIGHT: tx += probeR; break;
         }
         boolean accepted = svc.joystick(displayId, cx, cy, tx, ty, duration);
-        recordGesture(accepted, label + String.format(Locale.US, " %.2f studs %dms", studs, duration));
+        recordGesture(accepted, label + String.format(Locale.US,
+                " %.2f studs %dms nominal=%dms deflection=%.3f",
+                studs, duration, nominalDuration, deflectionScale));
         nextActionAtMs = now + duration + 80;
         return accepted;
     }
