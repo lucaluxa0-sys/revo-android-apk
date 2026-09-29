@@ -117,5 +117,113 @@ final class RevoMovementSpeed {
 }
 '''
 (JAVA / 'RevoMovementSpeed.java').write_text(speed, encoding='utf-8')
+
+# Gather pattern parity: the pre-gather router already uses RevoMovementSpeed, but
+# RevoGatherAdapter historically retained the provisional 62.5 ms/stud default.
+# That makes every e_lol leg 1.5x too long at the normal configured MoveSpeed=24.
+gather_path = JAVA / 'RevoGatherAdapter.java'
+if not gather_path.exists():
+    raise SystemExit('movement-speed gather patch missing RevoGatherAdapter.java')
+gather = gather_path.read_text(encoding='utf-8')
+
+def gather_replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit('movement-speed gather patch anchor missing: ' + label)
+    return text.replace(old, new, 1)
+
+gather = gather_replace_once(
+    gather,
+    '''        final String account, patternName;
+        final double width, length, repetitions, alignment, msPerStud;
+''',
+    '''        final String account, patternName;
+        final double width, length, repetitions, alignment, baseMoveSpeed, msPerStud;
+''',
+    'config fields'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''        Config(String account, String patternName, double width, double length,
+               double repetitions, double alignment, double msPerStud, long keyDelayMs,
+''',
+    '''        Config(String account, String patternName, double width, double length,
+               double repetitions, double alignment, double baseMoveSpeed, double msPerStud, long keyDelayMs,
+''',
+    'config constructor signature'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''            this.length = length; this.repetitions = repetitions; this.alignment = alignment;
+            this.msPerStud = msPerStud; this.keyDelayMs = keyDelayMs;
+''',
+    '''            this.length = length; this.repetitions = repetitions; this.alignment = alignment;
+            this.baseMoveSpeed = baseMoveSpeed; this.msPerStud = msPerStud; this.keyDelayMs = keyDelayMs;
+''',
+    'config constructor assignment'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''            double alignment = o.optDouble("alignment", 0);
+            double msPerStud = positiveOr(o.optDouble("msPerStud", 0), DEFAULT_MS_PER_STUD);
+            long keyDelayMs = Math.max(0, o.optLong("keyDelayMs", 50));
+''',
+    '''            double alignment = o.optDouble("alignment", 0);
+            double msPerStud = o.optDouble("msPerStud", 0);
+            if (!Double.isFinite(msPerStud) || msPerStud <= 0) msPerStud = 0;
+            double baseMoveSpeed = positiveOr(o.optDouble("baseMoveSpeed", 0), 24.0);
+            long keyDelayMs = Math.max(0, o.optLong("keyDelayMs", 50));
+''',
+    'configure timing'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''            config = new Config(account, patternName, width, length, repetitions, alignment,
+                    msPerStud, keyDelayMs, joyX, joyY, joyR, requireRoblox, steps);
+''',
+    '''            config = new Config(account, patternName, width, length, repetitions, alignment,
+                    baseMoveSpeed, msPerStud, keyDelayMs, joyX, joyY, joyR, requireRoblox, steps);
+''',
+    'config creation'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''        long durationMs = Math.max(50, Math.min(MAX_GESTURE_MS, Math.round(step.studs * c.msPerStud)));
+''',
+    '''        long durationMs = RevoMovementSpeed.durationMs(
+                step.studs, c.baseMoveSpeed, c.msPerStud,
+                0, false, false, false, false, false, MAX_GESTURE_MS);
+''',
+    'gather duration'
+)
+
+gather = gather_replace_once(
+    gather,
+    '''            o.put("movementMsPerStud", c == null ? 0 : c.msPerStud);
+            o.put("movementCalibration", c == null ? "" : "provisional-android");
+''',
+    '''            double effectiveSpeed = c == null ? 0 : RevoMovementSpeed.effectiveSpeed(
+                    c.baseMoveSpeed, 0, false, false, false, false, false);
+            o.put("baseMoveSpeed", c == null ? 0 : c.baseMoveSpeed);
+            o.put("effectiveMoveSpeed", effectiveSpeed);
+            o.put("msPerStudOverride", c == null ? 0 : c.msPerStud);
+            o.put("movementMsPerStud", c == null ? 0 :
+                    (c.msPerStud > 0 ? c.msPerStud : (effectiveSpeed > 0 ? 1000.0 / effectiveSpeed : 0)));
+            o.put("movementTimingMode", c != null && c.msPerStud > 0
+                    ? "explicit-ms-per-stud-override"
+                    : "desktop-effective-speed-v1");
+            o.put("movementCalibration", c == null ? "" : "desktop-effective-speed-v1");
+''',
+    'gather state timing'
+)
+
+gather_path.write_text(gather, encoding='utf-8')
+
 print('PASS: patched source-grounded v0.9c MoveSpeed timing provider')
 print('  Java:', JAVA / 'RevoMovementSpeed.java')
+print('PASS: patched RevoGatherAdapter to desktop-effective-speed-v1 timing')
+print('  Java:', gather_path)
