@@ -52,6 +52,8 @@ router = replace_once(
     private volatile int currentYawSlot = 0;
     private volatile long fieldRouteActionCount = 0;
     private volatile int blackBearCheckpointAttempts = 0;
+    private volatile int claimModalCloseAttempts = 0;
+    private volatile boolean claimModalGateDone = false;
     private volatile boolean lastGestureAccepted;
 ''',
     'route state fields'
@@ -62,7 +64,7 @@ router = replace_once(
     '''        cannonSlotMoves = 0; lastGestureAccepted = false; lastAction = ""; lastError = ""; lastTemplate = ""; lastMatch = null;
 ''',
     '''        cannonSlotMoves = 0; currentYawSlot = 0; fieldRouteActionCount = 0;
-        blackBearCheckpointAttempts = 0;
+        blackBearCheckpointAttempts = 0; claimModalCloseAttempts = 0; claimModalGateDone = false;
         lastGestureAccepted = false; lastAction = ""; lastError = ""; lastTemplate = ""; lastMatch = null;
 ''',
     'onStart reset'
@@ -85,6 +87,33 @@ router = replace_once(
     '''            case CLAIMED:
                 if (claimedHive <= 0) return fail("invalid claimed hive");
                 Log.i(TAG, "Claimed Hive: " + claimedHive);
+
+                // Bee Swarm mobile can open the claimed bee's detail panel from the
+                // same interaction used to claim a hive. That modal intercepts the
+                // camera drag, so never begin yaw until the panel is visibly gone.
+                if (!claimModalGateDone) {
+                    if (isClaimBeeModal(frame)) {
+                        if (claimModalCloseAttempts >= 3) {
+                            return fail("claim bee modal would not close before cannon yaw");
+                        }
+                        float closeX = frame.getWidth() * 0.370f;
+                        float closeY = frame.getHeight() * 0.204f;
+                        boolean accepted = svc.tap(displayId, closeX, closeY, 80);
+                        claimModalCloseAttempts++;
+                        recordGesture(accepted, String.format(Locale.US,
+                                "mobile claim modal close attempt=%d tap=(%.1f,%.1f)",
+                                claimModalCloseAttempts, closeX, closeY));
+                        nextActionAtMs = now + 450;
+                        break;
+                    }
+                    if (claimModalCloseAttempts == 0 && elapsedState(now) < 1600) {
+                        lastDecision = "waiting:claim-modal-before-yaw";
+                        break;
+                    }
+                    claimModalGateDone = true;
+                    lastDecision = "claim-modal-clear-before-yaw";
+                }
+
                 if (currentYawSlot != 4) {
                     if (setYaw(frame, svc, 4, 250, "mobile GotoCannon approach: SetYaw(4)")) {
                         lastDecision = "cannon-approach-yaw-4";
@@ -269,6 +298,23 @@ helpers = r'''    private boolean isPineTree(String field) {
         return "sunflower".equals(n) || "sunflowerfield".equals(n);
     }
 
+    // Live 960x540 Bee Swarm mobile modal samples:
+    // red close square ~= (224,62,52) at (0.354w,0.185h)
+    // yellow title area ~= (255,232,93) at (0.417w,0.204h).
+    private boolean isClaimBeeModal(Bitmap frame) {
+        int w = frame.getWidth(), h = frame.getHeight();
+        int rx = Math.max(0, Math.min(w - 1, Math.round(w * 0.354f)));
+        int ry = Math.max(0, Math.min(h - 1, Math.round(h * 0.185f)));
+        int yx = Math.max(0, Math.min(w - 1, Math.round(w * 0.417f)));
+        int yy = Math.max(0, Math.min(h - 1, Math.round(h * 0.204f)));
+        int rp = frame.getPixel(rx, ry), yp = frame.getPixel(yx, yy);
+        int rr=(rp>>16)&255, rg=(rp>>8)&255, rb=rp&255;
+        int yr=(yp>>16)&255, yg=(yp>>8)&255, yb=yp&255;
+        boolean redClose = rr >= 180 && rg <= 110 && rb <= 100 && rr - rg >= 80;
+        boolean yellowTitle = yr >= 210 && yg >= 175 && yb <= 140;
+        return redClose && yellowTitle;
+    }
+
     /**
      * Desktop SetYaw uses eight absolute 45-degree yaw slots. Android has no
      * keyboard RotLeft/RotRight, so preserve the discrete slot semantics with
@@ -347,6 +393,8 @@ router = replace_once(
             r.put("fieldRouteActionCount", fieldRouteActionCount);
             r.put("blackBearCheckpointAttempts", blackBearCheckpointAttempts);
             r.put("currentYawSlot", currentYawSlot);
+            r.put("claimModalCloseAttempts", claimModalCloseAttempts);
+            r.put("claimModalGateDone", claimModalGateDone);
             r.put("androidInputAdaptation", "accessibility-joystick-touch-v1");
             r.put("androidCameraYawAdaptation", "8-slot-camera-drag-v1");
             r.put("fieldRoutingPorted", true);
