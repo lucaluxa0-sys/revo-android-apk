@@ -44,6 +44,7 @@ once(
     private volatile long cameraPreflightNextAtMs = 0;
     private volatile int cameraPreflightTaps = 0;
     private volatile int cameraPreflightMenuRetries = 0;
+    private volatile int cameraPreflightGameplayReadyFrames = 0;
     private volatile boolean routeStarted = false;
 
     private volatile Thread worker;
@@ -62,6 +63,7 @@ once(
         cameraPreflightNextAtMs = 0;
         cameraPreflightTaps = 0;
         cameraPreflightMenuRetries = 0;
+        cameraPreflightGameplayReadyFrames = 0;
         status = "Starting camera preflight";
 ''',
 "start preflight")
@@ -135,14 +137,31 @@ once(
                 // InputDispatcher later drops the touch. Do not start the settle
                 // timer or consume retries until a live Roblox window/root exists.
                 if (!svc.isRobloxTouchWindowReady()) {
+                    cameraPreflightGameplayReadyFrames = 0;
                     cameraPreflightNextAtMs = 0;
                     status = "Camera preflight: waiting for touch-ready Roblox window";
                     return false;
                 }
-                // Once touch-ready, preserve the existing settle window.
+                // A live Roblox application window also exists on Home/join/loading
+                // screens. Require the actual mobile gameplay controls before a
+                // pause-menu retry can be consumed.
+                if (!isRobloxGameplayReady(frame)) {
+                    cameraPreflightGameplayReadyFrames = 0;
+                    cameraPreflightNextAtMs = 0;
+                    status = "Camera preflight: waiting for Bee Swarm gameplay HUD";
+                    return false;
+                }
+                cameraPreflightGameplayReadyFrames++;
+                if (cameraPreflightGameplayReadyFrames < 2) {
+                    cameraPreflightNextAtMs = 0;
+                    status = "Camera preflight: confirming gameplay HUD";
+                    return false;
+                }
+                // Once gameplay is visually ready on consecutive frames, preserve
+                // a short settle window before opening the Roblox pause menu.
                 if (cameraPreflightNextAtMs == 0) {
-                    cameraPreflightNextAtMs = now + 900;
-                    status = "Camera preflight: settling Roblox";
+                    cameraPreflightNextAtMs = now + 500;
+                    status = "Camera preflight: settling gameplay";
                     return false;
                 }
                 if (now < cameraPreflightNextAtMs) return false;
@@ -251,6 +270,43 @@ once(
             default:
                 return false;
         }
+    }
+
+    private boolean isRobloxGameplayReady(Bitmap frame) {
+        final int fw = frame.getWidth();
+        final int fh = frame.getHeight();
+        final float scale = Math.min(fw / 960.0f, fh / 540.0f);
+        final int cy = Math.round(fh * 0.8425926f);
+        final int leftCx = Math.round(fw * 0.09375f);
+        final int rightCx = Math.round(fw * 0.90625f);
+        final int leftEdges = hudRadialContrastCount(frame, leftCx, cy, scale);
+        final int rightEdges = hudRadialContrastCount(frame, rightCx, cy, scale);
+
+        // Measured on the real BlueStacks load sequence at 960x540:
+        // joining/loading maxed at 14/16 strong samples; live gameplay was
+        // 43+/26. Keep conservative margins and require both mobile controls.
+        return leftEdges >= 28 && rightEdges >= 20;
+    }
+
+    private int hudRadialContrastCount(Bitmap frame, int cx, int cy, float scale) {
+        final int fw = frame.getWidth();
+        final int fh = frame.getHeight();
+        final float innerR = 50.0f * scale;
+        final float outerR = 65.0f * scale;
+        int strong = 0;
+        for (int i = 0; i < 48; i++) {
+            double angle = (Math.PI * 2.0 * i) / 48.0;
+            int x1 = Math.max(0, Math.min(fw - 1, Math.round(cx + innerR * (float)Math.cos(angle))));
+            int y1 = Math.max(0, Math.min(fh - 1, Math.round(cy + innerR * (float)Math.sin(angle))));
+            int x2 = Math.max(0, Math.min(fw - 1, Math.round(cx + outerR * (float)Math.cos(angle))));
+            int y2 = Math.max(0, Math.min(fh - 1, Math.round(cy + outerR * (float)Math.sin(angle))));
+            int p1 = frame.getPixel(x1, y1);
+            int p2 = frame.getPixel(x2, y2);
+            int l1 = (((p1 >> 16) & 0xff) + ((p1 >> 8) & 0xff) + (p1 & 0xff)) / 3;
+            int l2 = (((p2 >> 16) & 0xff) + ((p2 >> 8) & 0xff) + (p2 & 0xff)) / 3;
+            if (Math.abs(l1 - l2) >= 18) strong++;
+        }
+        return strong;
     }
 
     private boolean isRobloxPauseMenuOpen(Bitmap frame) {
@@ -408,4 +464,6 @@ verify_service = service_p.read_text()
 verify_macro = p.read_text()
 assert "isRobloxTouchWindowReady()" in verify_service
 assert "waiting for touch-ready Roblox window" in verify_macro
-print("PASS: installed Roblox touch-ready gate + Camera Mode=Classic startup preflight")
+assert "isRobloxGameplayReady(frame)" in verify_macro
+assert "waiting for Bee Swarm gameplay HUD" in verify_macro
+print("PASS: installed Roblox gameplay-ready gate + Camera Mode=Classic startup preflight")
