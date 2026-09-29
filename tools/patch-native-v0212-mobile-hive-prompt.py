@@ -90,11 +90,40 @@ helper='''    // Android-native hive interaction detection. Roblox mobile render
         return false;
     }
 
+    // Current Roblox mobile also renders occupied hives as a red/orange
+    // top-center trading banner ("has not Unlocked Trading") instead of the
+    // older neutral-Tap + blue-action layout. Sample that fixed banner ROI
+    // sparsely so hive acquisition can back off instead of walking into it.
+    private boolean isMobileOccupiedHiveBanner(Bitmap frame) {
+        int fw=frame.getWidth(), fh=frame.getHeight();
+        int x1=Math.max(0,Math.min(fw-1,Math.round(fw*0.3125f)));
+        int y1=Math.max(0,Math.min(fh-1,Math.round(fh*0.1574f)));
+        int x2=Math.max(x1+1,Math.min(fw,Math.round(fw*0.6875f)));
+        int y2=Math.max(y1+1,Math.min(fh,Math.round(fh*0.2963f)));
+        int red=0, total=0;
+        for(int y=y1;y<y2;y+=6) {
+            for(int x=x1;x<x2;x+=6) {
+                int p=frame.getPixel(x,y);
+                int r=(p>>16)&255, g=(p>>8)&255, b=p&255;
+                total++;
+                if(r>=150 && r>=Math.round(g*1.35f) && r>=Math.round(b*1.25f)) red++;
+            }
+        }
+        // Saved QA at 960x540: occupied trading banner ~=64% red samples;
+        // no-prompt frames ~=8-10%. 35% keeps a wide safety margin.
+        return total>0 && ((float)red/(float)total)>=0.35f;
+    }
+
     private Match findMobileHivePrompt(Bitmap frame, String[] names) {
-        if(!isMobileTapPrompt(frame)) return null;
         int fw=frame.getWidth(), fh=frame.getHeight();
         int x=Math.round(fw*0.4114583f), y=Math.round(fh*0.1703704f);
         int w=Math.max(1,Math.round(fw*0.265625f)), h=Math.max(1,Math.round(fh*0.1037037f));
+
+        if(asksForOccupiedHive(names) && isMobileOccupiedHiveBanner(frame)) {
+            return new Match("mobileoccupied",x,y,w,h);
+        }
+
+        if(!isMobileTapPrompt(frame)) return null;
         if(isMobileClaimHive(frame) && asksForClaim(names)) {
             return new Match("claimhive",x,y,w,h);
         }
