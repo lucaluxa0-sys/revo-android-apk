@@ -26,6 +26,12 @@ router = replace_once(
         BLACK_BEAR_CHECKPOINT_WALK,
         BLACK_BEAR_CHECKPOINT_DETECT,
         BLACK_BEAR_CHECKPOINT_FAILED,
+        MOBILE_BLACK_BEAR_RECOVER_YAW,
+        MOBILE_BLACK_BEAR_RECOVER_FORWARD_A,
+        MOBILE_BLACK_BEAR_RECOVER_FORWARD_B,
+        MOBILE_BLACK_BEAR_RECOVER_RIGHT,
+        MOBILE_BLACK_BEAR_RECOVER_DIAGONAL,
+        MOBILE_BLACK_BEAR_RECOVER_DETECT,
         SUNFLOWER_ROUTE_LEFT,
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
@@ -190,21 +196,21 @@ router = replace_once(
                 // If no cannon prompt can exist, the proven Android endpoint is already
                 // beside Black Bear. Seek his mobile Tap banner with small forward probes.
                 if (isSunflower(c.field) && elapsedState(now) > CANNON_SEEK_TIMEOUT_MS) {
-                    if (isMobileTapPrompt(frame)) {
-                        lastTemplate = "mobile-black-bear";
-                        blackBearCheckpointAttempts = 0;
-                        if (setYaw(frame, svc, 0, 0,
-                                "mobile sunflower fallback: Black Bear Tap -> SetYaw(0)")) {
-                            transitionAfterGesture(State.SUNFLOWER_ROUTE_LEFT);
-                        }
+                    if (beginSunflowerFromMobileBlackBear(frame, svc,
+                            "mobile sunflower fallback: direct Black Bear Tap")) break;
+
+                    blackBearCheckpointAttempts++;
+                    if (blackBearCheckpointAttempts <= 4) {
+                        moveMobileProbe(frame, svc, c, Direction.FORWARD, 1.25, 170,
+                                "mobile sunflower fallback: direct seek Black Bear Tap attempt " + blackBearCheckpointAttempts);
                         break;
                     }
-                    blackBearCheckpointAttempts++;
-                    if (blackBearCheckpointAttempts > 12) {
-                        return fail("mobile Black Bear fallback prompt not found");
-                    }
-                    moveMobileProbe(frame, svc, c, Direction.FORWARD, 1.25, 170,
-                            "mobile sunflower fallback: seek Black Bear Tap attempt " + blackBearCheckpointAttempts);
+
+                    // Live QA can land hard against the brown wall beside Black Bear.
+                    // Stop pushing into it and run the calibrated local recovery.
+                    blackBearCheckpointAttempts = 0;
+                    transition(State.MOBILE_BLACK_BEAR_RECOVER_YAW,
+                            "mobile Black Bear wall recovery");
                     break;
                 }
 
@@ -348,6 +354,52 @@ new_ready = r'''            case READY_AT_CANNON:
             }
             case BLACK_BEAR_CHECKPOINT_FAILED:
                 return fail("desktop cannon.black-bear checkpoint interaction failed after 3 attempts");
+            case MOBILE_BLACK_BEAR_RECOVER_YAW:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: prompt before yaw")) break;
+                // Two rightward 45-degree camera slots reproduced the manual wall
+                // recovery and exposed Black Bear's blue platform.
+                if (setYaw(frame, svc, 2, 300,
+                        "mobile Black Bear recovery: SetYaw(2)")) {
+                    transitionAfterGesture(State.MOBILE_BLACK_BEAR_RECOVER_FORWARD_A);
+                }
+                break;
+            case MOBILE_BLACK_BEAR_RECOVER_FORWARD_A:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: prompt after forward A")) break;
+                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
+                        "mobile Black Bear recovery: Forward 12")) {
+                    transitionAfterGesture(State.MOBILE_BLACK_BEAR_RECOVER_FORWARD_B);
+                }
+                break;
+            case MOBILE_BLACK_BEAR_RECOVER_FORWARD_B:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: prompt after forward B")) break;
+                if (moveField(frame, svc, c, Direction.FORWARD, 13.0,
+                        "mobile Black Bear recovery: Forward 13")) {
+                    transitionAfterGesture(State.MOBILE_BLACK_BEAR_RECOVER_RIGHT);
+                }
+                break;
+            case MOBILE_BLACK_BEAR_RECOVER_RIGHT:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: prompt after right")) break;
+                if (moveField(frame, svc, c, Direction.RIGHT, 8.0,
+                        "mobile Black Bear recovery: Right 8")) {
+                    transitionAfterGesture(State.MOBILE_BLACK_BEAR_RECOVER_DIAGONAL);
+                }
+                break;
+            case MOBILE_BLACK_BEAR_RECOVER_DIAGONAL:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: prompt before diagonal")) break;
+                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.RIGHT, 10.0,
+                        "mobile Black Bear recovery: Forward+Right 10")) {
+                    transitionAfterGesture(State.MOBILE_BLACK_BEAR_RECOVER_DETECT);
+                }
+                break;
+            case MOBILE_BLACK_BEAR_RECOVER_DETECT:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "mobile Black Bear recovery: final prompt")) break;
+                return fail("mobile Black Bear wall recovery prompt not found");
             case SUNFLOWER_ROUTE_LEFT:
                 if (moveField(frame, svc, c, Direction.LEFT, 30.0,
                         "desktop black-bear.sunflower-tr: Walk Left 30")) {
@@ -399,6 +451,18 @@ helpers = r'''    private boolean isPineTree(String field) {
     private boolean isSunflower(String field) {
         String n = field == null ? "" : field.toLowerCase(Locale.US).replaceAll("[^a-z0-9]", "");
         return "sunflower".equals(n) || "sunflowerfield".equals(n);
+    }
+
+    private boolean beginSunflowerFromMobileBlackBear(Bitmap frame,
+                                                       RevoAccessibilityService svc,
+                                                       String label) {
+        if (!isMobileTapPrompt(frame)) return false;
+        lastTemplate = "mobile-black-bear";
+        blackBearCheckpointAttempts = 0;
+        if (setYaw(frame, svc, 0, 0, label + " -> SetYaw(0)")) {
+            transitionAfterGesture(State.SUNFLOWER_ROUTE_LEFT);
+        }
+        return true;
     }
 
     // Locate the Bee detail modal by color structure instead of one fixed pixel.
