@@ -147,7 +147,7 @@ once(
                 }
                 if (now < cameraPreflightNextAtMs) return false;
                 boolean menuTapAccepted = svc.tap(
-                        displayId, w * 0.1489583f, h * 0.0962963f, 35);
+                        displayId, w * 0.0604167f, h * 0.0962963f, 35);
                 if (!menuTapAccepted) {
                     cameraPreflightMenuRetries++;
                     if (cameraPreflightMenuRetries >= 4) {
@@ -185,7 +185,7 @@ once(
                         return false;
                     }
                     boolean retryAccepted = svc.tap(
-                            displayId, w * 0.1489583f, h * 0.0962963f, 35);
+                            displayId, w * 0.0604167f, h * 0.0962963f, 35);
                     if (retryAccepted) cameraPreflightMenuRetries++;
                     cameraPreflightNextAtMs = now + 500;
                     status = "Camera preflight: pause menu missing; retrying "
@@ -218,7 +218,7 @@ once(
                 if (now < cameraPreflightNextAtMs) return false;
                 if (isCameraClassic(frame)) {
                     // Toggle the Roblox menu closed.
-                    svc.tap(displayId, w * 0.1489583f, h * 0.0962963f, 35);
+                    svc.tap(displayId, w * 0.0604167f, h * 0.0962963f, 35);
                     cameraPreflightState = CameraPreflightState.CLOSE_MENU;
                     cameraPreflightNextAtMs = now + 350;
                     status = "Camera preflight: Classic confirmed";
