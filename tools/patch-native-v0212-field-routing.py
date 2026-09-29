@@ -426,13 +426,14 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case SUNFLOWER_ROUTE_CENTER_RIGHT:
-                // Live QA shows the desktop edge lands on Sunflower's right-side border.
-                // A manual 17-stud LEFT probe at MoveSpeed 24 moved the avatar into the
-                // flower area; the prior RIGHT correction pushed it farther out.
-                if (moveField(frame, svc, c, Direction.LEFT, 17.0,
-                        "mobile sunflower: center Left 17 before gather")) {
+                // With the real desktop e_lol 2x8 dimensions restored, live QA shows
+                // the first pattern action (Left 10) lands near Sunflower center.
+                // Therefore the route anchor itself is about 10 studs too far right:
+                // move Left 27 total instead of the previous Left 17 correction.
+                if (moveField(frame, svc, c, Direction.LEFT, 27.0,
+                        "mobile sunflower: center Left 27 before gather")) {
                     transitionAfterGesture(State.FIELD_READY);
-                    Log.i(TAG, "FIELD_ROUTE_READY route=black-bear->sunflower-tr->mobile-center-left field=" + c.field);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=black-bear->sunflower-tr->mobile-center-left27 field=" + c.field);
                 }
                 break;
             case FIELD_READY:
