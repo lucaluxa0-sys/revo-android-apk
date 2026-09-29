@@ -68,6 +68,38 @@ router = replace_once(
     'onStart reset'
 )
 
+# Live Android QA at yaw slot 0 wedges the avatar against the hive wall before
+# the cannon route. Match the desktop route's expected approach frame by turning
+# the camera 180 degrees (four 45-degree slots) once after a successful claim.
+router = replace_once(
+    router,
+    '''            case CLAIMED:
+                if (claimedHive <= 0) return fail("invalid claimed hive");
+                Log.i(TAG, "Claimed Hive: " + claimedHive);
+                if (move(frame, svc, c, Direction.FORWARD, 12.0, "desktop GotoCannon: Forward 12")) {
+                    cannonSlotMoves = 0;
+                    transitionAfterGesture(State.CANNON_FORWARD);
+                }
+                break;
+''',
+    '''            case CLAIMED:
+                if (claimedHive <= 0) return fail("invalid claimed hive");
+                Log.i(TAG, "Claimed Hive: " + claimedHive);
+                if (currentYawSlot != 4) {
+                    if (setYaw(frame, svc, 4, 250, "mobile GotoCannon approach: SetYaw(4)")) {
+                        lastDecision = "cannon-approach-yaw-4";
+                    }
+                    break;
+                }
+                if (move(frame, svc, c, Direction.FORWARD, 12.0, "desktop GotoCannon: Forward 12")) {
+                    cannonSlotMoves = 0;
+                    transitionAfterGesture(State.CANNON_FORWARD);
+                }
+                break;
+''',
+    'mobile cannon approach yaw'
+)
+
 old_ready = '''            case READY_AT_CANNON:
                 lastDecision = "blocked:field-routing-not-yet-ported:" + c.field;
                 break;
