@@ -92,12 +92,12 @@ router = replace_once(
                 // same interaction used to claim a hive. That modal intercepts the
                 // camera drag, so never begin yaw until the panel is visibly gone.
                 if (!claimModalGateDone) {
-                    if (isClaimBeeModal(frame)) {
+                    float[] close = findClaimBeeModalClose(frame);
+                    if (close != null) {
                         if (claimModalCloseAttempts >= 3) {
                             return fail("claim bee modal would not close before cannon yaw");
                         }
-                        float closeX = frame.getWidth() * 0.370f;
-                        float closeY = frame.getHeight() * 0.204f;
+                        float closeX = close[0], closeY = close[1];
                         boolean accepted = svc.tap(displayId, closeX, closeY, 80);
                         claimModalCloseAttempts++;
                         recordGesture(accepted, String.format(Locale.US,
@@ -298,21 +298,59 @@ helpers = r'''    private boolean isPineTree(String field) {
         return "sunflower".equals(n) || "sunflowerfield".equals(n);
     }
 
-    // Live 960x540 Bee Swarm mobile modal samples:
-    // red close square ~= (224,62,52) at (0.354w,0.185h)
-    // yellow title area ~= (255,232,93) at (0.417w,0.204h).
-    private boolean isClaimBeeModal(Bitmap frame) {
+    // Locate the Bee detail modal by color structure instead of one fixed pixel.
+    // The panel shifts vertically between Android UI states, but it consistently
+    // has a red close square immediately left of a wide yellow title strip.
+    private float[] findClaimBeeModalClose(Bitmap frame) {
         int w = frame.getWidth(), h = frame.getHeight();
-        int rx = Math.max(0, Math.min(w - 1, Math.round(w * 0.354f)));
-        int ry = Math.max(0, Math.min(h - 1, Math.round(h * 0.185f)));
-        int yx = Math.max(0, Math.min(w - 1, Math.round(w * 0.417f)));
-        int yy = Math.max(0, Math.min(h - 1, Math.round(h * 0.204f)));
-        int rp = frame.getPixel(rx, ry), yp = frame.getPixel(yx, yy);
-        int rr=(rp>>16)&255, rg=(rp>>8)&255, rb=rp&255;
-        int yr=(yp>>16)&255, yg=(yp>>8)&255, yb=yp&255;
-        boolean redClose = rr >= 180 && rg <= 110 && rb <= 100 && rr - rg >= 80;
-        boolean yellowTitle = yr >= 210 && yg >= 175 && yb <= 140;
-        return redClose && yellowTitle;
+        int x0 = Math.max(0, Math.round(w * 0.24f));
+        int x1 = Math.min(w - 1, Math.round(w * 0.54f));
+        int y0 = Math.max(0, Math.round(h * 0.07f));
+        int y1 = Math.min(h - 1, Math.round(h * 0.34f));
+
+        for (int y = y0; y <= y1; y += 3) {
+            for (int x = x0; x <= x1; x += 3) {
+                int p = frame.getPixel(x, y);
+                int r=(p>>16)&255, g=(p>>8)&255, b=p&255;
+                boolean red = r >= 175 && g <= 120 && b <= 115 && r - g >= 65;
+                if (!red) continue;
+
+                int yellow = 0;
+                int yTop = Math.max(y0, y - 18), yBottom = Math.min(y1, y + 48);
+                int xLeft = Math.min(w - 1, x + 28), xRight = Math.min(w - 1, x + 265);
+                for (int yy = yTop; yy <= yBottom && yellow < 10; yy += 4) {
+                    for (int xx = xLeft; xx <= xRight; xx += 4) {
+                        int q = frame.getPixel(xx, yy);
+                        int qr=(q>>16)&255, qg=(q>>8)&255, qb=q&255;
+                        if (qr >= 205 && qg >= 165 && qb <= 155 && qr - qb >= 55) {
+                            yellow++;
+                            if (yellow >= 10) break;
+                        }
+                    }
+                }
+                if (yellow < 10) continue;
+
+                int minX=x, maxX=x, minY=y, maxY=y, redCount=0;
+                int sx0=Math.max(x0, x-35), sx1=Math.min(x1, x+55);
+                int sy0=Math.max(y0, y-35), sy1=Math.min(y1, y+55);
+                for (int yy=sy0; yy<=sy1; yy++) {
+                    for (int xx=sx0; xx<=sx1; xx++) {
+                        int q=frame.getPixel(xx,yy);
+                        int qr=(q>>16)&255, qg=(q>>8)&255, qb=q&255;
+                        if (qr >= 175 && qg <= 120 && qb <= 115 && qr - qg >= 65) {
+                            minX=Math.min(minX,xx); maxX=Math.max(maxX,xx);
+                            minY=Math.min(minY,yy); maxY=Math.max(maxY,yy);
+                            redCount++;
+                        }
+                    }
+                }
+                int boxW = maxX - minX + 1, boxH = maxY - minY + 1;
+                if (redCount >= 400 && boxW >= 20 && boxW <= 60 && boxH >= 20 && boxH <= 60) {
+                    return new float[]{(minX+maxX)*0.5f, (minY+maxY)*0.5f};
+                }
+            }
+        }
+        return null;
     }
 
     /**
