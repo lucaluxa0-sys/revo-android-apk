@@ -13,6 +13,13 @@ start_pat = re.compile(
     re.S,
 )
 start_repl = '''@JavascriptInterface public boolean startMacroAndRoblox(String account) {
+        RevoAccessibilityService svc = RevoAccessibilityService.get();
+        if (svc != null && svc.isRobloxForeground()) {
+            engine().start();
+            android.util.Log.i("RevoAndroid", "Macro engine attached to existing Roblox foreground; account=" + String.valueOf(account));
+            return true;
+        }
+
         boolean launched = launchRoblox();
         if (launched) {
             engine().start();
@@ -63,6 +70,8 @@ if n != 1:
 
 if 'roblox://placeId=1537690962' not in s:
     raise SystemExit('Bee Swarm URI missing after patch')
+if 'Macro engine attached to existing Roblox foreground' not in s:
+    raise SystemExit('live Roblox attach guard missing after patch')
 if 'Macro engine started after Bee Swarm launch request' not in s:
     raise SystemExit('engine handoff log missing after patch')
 if 'getLaunchIntentForPackage(pkg);' not in s:
