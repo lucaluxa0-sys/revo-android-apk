@@ -3,7 +3,7 @@ name: Build Revolution Android v0.2.12 phone preview APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, bluestacks-claimed-hive-test ]
     paths:
       - '.github/workflows/build-v0212-phone-preview.yml'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
