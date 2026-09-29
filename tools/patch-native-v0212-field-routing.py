@@ -426,13 +426,13 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case SUNFLOWER_ROUTE_CENTER_RIGHT:
-                // Live Android QA lands the desktop edge against the white fence.
-                // At MoveSpeed 24, a 17-stud right correction (~708ms) reproduces
-                // the accepted manual 700ms probe and centers the gather start.
-                if (moveField(frame, svc, c, Direction.RIGHT, 17.0,
-                        "mobile sunflower: center Right 17 before gather")) {
+                // Live QA shows the desktop edge lands on Sunflower's right-side border.
+                // A manual 17-stud LEFT probe at MoveSpeed 24 moved the avatar into the
+                // flower area; the prior RIGHT correction pushed it farther out.
+                if (moveField(frame, svc, c, Direction.LEFT, 17.0,
+                        "mobile sunflower: center Left 17 before gather")) {
                     transitionAfterGesture(State.FIELD_READY);
-                    Log.i(TAG, "FIELD_ROUTE_READY route=black-bear->sunflower-tr->mobile-center field=" + c.field);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=black-bear->sunflower-tr->mobile-center-left field=" + c.field);
                 }
                 break;
             case FIELD_READY:
