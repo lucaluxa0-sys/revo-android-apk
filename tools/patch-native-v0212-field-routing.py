@@ -161,6 +161,67 @@ router = replace_once(
     'cannon seek modal guard'
 )
 
+# Sunflower does not actually require firing the Red Cannon. On accounts that
+# have fewer than 25 discovered bee types, the cannon prompt cannot exist. Keep
+# the normal cannon search untouched first; only after its timeout, use the
+# proven nearby Black Bear mobile Tap prompt as the anchor for the already-ported
+# black-bear.sunflower-tr edge.
+router = replace_once(
+    router,
+    """            case CANNON_SEEK_PROMPT: {
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-seek-prompt")) break;
+                Match p = find(frame, "press_e", c, now);
+                if (p != null) {
+                    lastMatch = p;
+                    transition(State.READY_AT_CANNON, "desktop PressEImage found");
+                    Log.i(TAG, "Reached cannon prompt; field routing is the next unported desktop layer");
+                    break;
+                }
+                moveMobileProbe(frame, svc, c, Direction.RIGHT, CANNON_SEEK_CHUNK_STUDS, 170, "desktop GotoCannon: continue Right seeking Press E");
+                if (elapsedState(now) > CANNON_SEEK_TIMEOUT_MS) return fail("failed to goto cannon prompt");
+                break;
+            }
+""",
+    """            case CANNON_SEEK_PROMPT: {
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-seek-prompt")) break;
+
+                // Preserve normal cannon behavior for the full desktop search window.
+                // If no cannon prompt can exist, the proven Android endpoint is already
+                // beside Black Bear. Seek his mobile Tap banner with small forward probes.
+                if (isSunflower(c.field) && elapsedState(now) > CANNON_SEEK_TIMEOUT_MS) {
+                    if (isMobileTapPrompt(frame)) {
+                        lastTemplate = "mobile-black-bear";
+                        blackBearCheckpointAttempts = 0;
+                        if (setYaw(frame, svc, 0, 0,
+                                "mobile sunflower fallback: Black Bear Tap -> SetYaw(0)")) {
+                            transitionAfterGesture(State.SUNFLOWER_ROUTE_LEFT);
+                        }
+                        break;
+                    }
+                    blackBearCheckpointAttempts++;
+                    if (blackBearCheckpointAttempts > 12) {
+                        return fail("mobile Black Bear fallback prompt not found");
+                    }
+                    moveMobileProbe(frame, svc, c, Direction.FORWARD, 1.25, 170,
+                            "mobile sunflower fallback: seek Black Bear Tap attempt " + blackBearCheckpointAttempts);
+                    break;
+                }
+
+                Match p = find(frame, "press_e", c, now);
+                if (p != null) {
+                    lastMatch = p;
+                    transition(State.READY_AT_CANNON, "desktop PressEImage found");
+                    Log.i(TAG, "Reached cannon prompt; field routing is the next unported desktop layer");
+                    break;
+                }
+                moveMobileProbe(frame, svc, c, Direction.RIGHT, CANNON_SEEK_CHUNK_STUDS, 170, "desktop GotoCannon: continue Right seeking Press E");
+                if (elapsedState(now) > CANNON_SEEK_TIMEOUT_MS) return fail("failed to goto cannon prompt");
+                break;
+            }
+""",
+    'sunflower mobile Black Bear fallback'
+)
+
 old_ready = '''            case READY_AT_CANNON:
                 lastDecision = "blocked:field-routing-not-yet-ported:" + c.field;
                 break;
