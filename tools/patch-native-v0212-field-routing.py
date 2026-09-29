@@ -90,30 +90,27 @@ router = replace_once(
 
                 // Bee Swarm mobile can open the claimed bee's detail panel from the
                 // same interaction used to claim a hive. That modal intercepts the
-                // camera drag, so never begin yaw until the panel is visibly gone.
+                // movement, so never leave the hive until the panel is visibly gone.
                 if (!claimModalGateDone) {
                     if (closeBeeModalIfPresent(frame, svc, now, "before-yaw")) break;
                     if (claimModalCloseAttempts == 0 && elapsedState(now) < 1600) {
-                        lastDecision = "waiting:claim-modal-before-yaw";
+                        lastDecision = "waiting:claim-modal-before-cannon-move";
                         break;
                     }
                     claimModalGateDone = true;
-                    lastDecision = "claim-modal-clear-before-yaw";
+                    lastDecision = "claim-modal-clear-before-cannon-move";
                 }
 
-                if (currentYawSlot != 4) {
-                    if (setYaw(frame, svc, 4, 250, "mobile GotoCannon approach: SetYaw(4)")) {
-                        lastDecision = "cannon-approach-yaw-4";
-                    }
-                    break;
-                }
-                if (move(frame, svc, c, Direction.FORWARD, 12.0, "desktop GotoCannon: Forward 12")) {
+                // Mobile spawns facing the hive wall. Back away from the hive
+                // without rotating the camera, so the subsequent Right leg stays
+                // on the cannon side of the hive row.
+                if (move(frame, svc, c, Direction.BACKWARD, 12.0, "mobile GotoCannon: Backward 12 (preserve world-right)")) {
                     cannonSlotMoves = 0;
                     transitionAfterGesture(State.CANNON_FORWARD);
                 }
                 break;
 ''',
-    'mobile cannon approach yaw'
+    'mobile cannon approach backward'
 )
 
 # Bee-detail panels can also be opened by later mobile camera/movement gestures.
