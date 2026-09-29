@@ -62,7 +62,7 @@ final class RevoPreGatherRouter {
     private static final long FRAME_SEARCH_INTERVAL_MS = 120;
     private static final long MAX_GESTURE_MS = 10_000;
     private static final double SEEK_CHUNK_STUDS = 1.25;
-    private static final double SWEEP_CHUNK_STUDS = 2.0; // Finer mobile sampling; paired with extended slot timeout.
+    private static final double SWEEP_CHUNK_STUDS = 3.0; // Mobile ~1 FPS capture: span one ~37-stud hive slot within 15s.
     private static final double CANNON_SEEK_CHUNK_STUDS = 0.85;
     private static final long SLOT_TIMEOUT_MS = 7_500;
     private static final long HIVE_SEEK_TIMEOUT_MS = 45_000;

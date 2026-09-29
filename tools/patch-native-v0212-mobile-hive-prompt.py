@@ -184,10 +184,9 @@ once(old_center,new_center,"mobile direct center claim")
 once(
 '''    private static final long SLOT_TIMEOUT_MS = 7_500;
 ''',
-'''    // Android screenshot delivery is ~1 FPS here. A 2-stud sweep needs about
-    // 19 observations to span one ~37-stud hive slot, so keep enough margin
-    // to sample the narrow mobile proximity trigger instead of skipping it.
-    private static final long SLOT_TIMEOUT_MS = 24_000;
+'''    // Android screenshot delivery on emulators/phones can be much slower than desktop frame polling.
+    // Keep desktop geometry, but allow enough time to observe the next mobile proximity prompt.
+    private static final long SLOT_TIMEOUT_MS = 15_000;
 ''',
 "mobile hive timeout adaptation")
 
