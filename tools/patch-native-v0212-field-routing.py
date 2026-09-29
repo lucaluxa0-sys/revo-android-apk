@@ -30,6 +30,7 @@ router = replace_once(
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
         SUNFLOWER_ROUTE_FORWARD,
+        SUNFLOWER_ROUTE_CENTER_RIGHT,
         CANNON_ROUTE_INTERACT,
         CANNON_ROUTE_FLIGHT,
         CANNON_ROUTE_ALIGN_DIAGONAL,
@@ -369,8 +370,17 @@ new_ready = r'''            case READY_AT_CANNON:
             case SUNFLOWER_ROUTE_FORWARD:
                 if (moveField(frame, svc, c, Direction.FORWARD, 40.0,
                         "desktop black-bear.sunflower-tr: Walk Forward 40")) {
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_CENTER_RIGHT);
+                }
+                break;
+            case SUNFLOWER_ROUTE_CENTER_RIGHT:
+                // Live Android QA lands the desktop edge against the white fence.
+                // At MoveSpeed 24, a 17-stud right correction (~708ms) reproduces
+                // the accepted manual 700ms probe and centers the gather start.
+                if (moveField(frame, svc, c, Direction.RIGHT, 17.0,
+                        "mobile sunflower: center Right 17 before gather")) {
                     transitionAfterGesture(State.FIELD_READY);
-                    Log.i(TAG, "FIELD_ROUTE_READY route=cannon->black-bear->sunflower-tr field=" + c.field);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=black-bear->sunflower-tr->mobile-center field=" + c.field);
                 }
                 break;
             case FIELD_READY:
