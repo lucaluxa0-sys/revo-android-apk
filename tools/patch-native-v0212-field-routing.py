@@ -92,20 +92,7 @@ router = replace_once(
                 // same interaction used to claim a hive. That modal intercepts the
                 // camera drag, so never begin yaw until the panel is visibly gone.
                 if (!claimModalGateDone) {
-                    float[] close = findClaimBeeModalClose(frame);
-                    if (close != null) {
-                        if (claimModalCloseAttempts >= 3) {
-                            return fail("claim bee modal would not close before cannon yaw");
-                        }
-                        float closeX = close[0], closeY = close[1];
-                        boolean accepted = svc.tap(displayId, closeX, closeY, 80);
-                        claimModalCloseAttempts++;
-                        recordGesture(accepted, String.format(Locale.US,
-                                "mobile claim modal close attempt=%d tap=(%.1f,%.1f)",
-                                claimModalCloseAttempts, closeX, closeY));
-                        nextActionAtMs = now + 450;
-                        break;
-                    }
+                    if (closeBeeModalIfPresent(frame, svc, now, "before-yaw")) break;
                     if (claimModalCloseAttempts == 0 && elapsedState(now) < 1600) {
                         lastDecision = "waiting:claim-modal-before-yaw";
                         break;
@@ -127,6 +114,54 @@ router = replace_once(
                 break;
 ''',
     'mobile cannon approach yaw'
+)
+
+# Bee-detail panels can also be opened by later mobile camera/movement gestures.
+# Re-check before every cannon-phase action so a panel never survives long enough
+# to intercept camera input or cover the Press-E detector.
+router = replace_once(
+    router,
+    """            case CANNON_FORWARD:
+                if (cannonSlotMoves >= claimedHive) { transition(State.CANNON_DOUBLE_JUMP, "cannon-slot-offset-complete"); break; }
+""",
+    """            case CANNON_FORWARD:
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-forward")) break;
+                if (cannonSlotMoves >= claimedHive) { transition(State.CANNON_DOUBLE_JUMP, "cannon-slot-offset-complete"); break; }
+""",
+    'cannon forward modal guard'
+)
+router = replace_once(
+    router,
+    """            case CANNON_SLOT_RIGHT:
+                transition(State.CANNON_FORWARD, "cannon-slot-step-complete");
+""",
+    """            case CANNON_SLOT_RIGHT:
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-slot-right")) break;
+                transition(State.CANNON_FORWARD, "cannon-slot-step-complete");
+""",
+    'cannon slot modal guard'
+)
+router = replace_once(
+    router,
+    """            case CANNON_DOUBLE_JUMP: {
+                float w = frame.getWidth(), h = frame.getHeight();
+""",
+    """            case CANNON_DOUBLE_JUMP: {
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-double-jump")) break;
+                float w = frame.getWidth(), h = frame.getHeight();
+""",
+    'cannon jump modal guard'
+)
+router = replace_once(
+    router,
+    """            case CANNON_SEEK_PROMPT: {
+                Match p = find(frame, "press_e", c, now);
+""",
+    """            case CANNON_SEEK_PROMPT: {
+                if (closeBeeModalIfPresent(frame, svc, now, "cannon-seek-prompt")) break;
+                Match p = find(frame, "press_e", c, now);
+""",
+    'cannon seek modal guard'
 )
 
 old_ready = '''            case READY_AT_CANNON:
@@ -351,6 +386,24 @@ helpers = r'''    private boolean isPineTree(String field) {
             }
         }
         return null;
+    }
+
+    private boolean closeBeeModalIfPresent(Bitmap frame, RevoAccessibilityService svc, long now, String phase) {
+        float[] close = findClaimBeeModalClose(frame);
+        if (close == null) return false;
+        if (claimModalCloseAttempts >= 8) {
+            fail("bee detail modal would not stay closed during cannon route");
+            return true;
+        }
+        float closeX = close[0], closeY = close[1];
+        boolean accepted = svc.tap(displayId, closeX, closeY, 80);
+        claimModalCloseAttempts++;
+        recordGesture(accepted, String.format(Locale.US,
+                "mobile bee modal close phase=%s attempt=%d tap=(%.1f,%.1f)",
+                phase, claimModalCloseAttempts, closeX, closeY));
+        lastDecision = "closing-bee-modal:" + phase;
+        nextActionAtMs = now + 450;
+        return true;
     }
 
     /**
