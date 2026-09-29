@@ -112,6 +112,7 @@ jobs:
           grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'getWindows()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'isRobloxTouchWindowReady' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'class RevoMovementSpeed' revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
           grep -q 'class RevoRemoteAgent' revo-android/app/src/main/java/com/revolution/android/RevoRemoteAgent.java

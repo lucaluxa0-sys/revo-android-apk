@@ -1,14 +1,22 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from pathlib import Path
 
 p = Path("revo-android/app/src/main/java/com/revolution/android/MacroEngine.java")
+service_p = Path("revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java")
 s = p.read_text()
+service_s = service_p.read_text()
 
 def once(old, new, label):
     global s
     if old not in s:
         raise SystemExit(f"missing marker: {label}")
     s = s.replace(old, new, 1)
+
+def service_once(old, new, label):
+    global service_s
+    if old not in service_s:
+        raise SystemExit(f"missing service marker: {label}")
+    service_s = service_s.replace(old, new, 1)
 
 once(
 '''    private final RevoPreGatherRouter routing;
@@ -121,9 +129,17 @@ once(
 
         switch (cameraPreflightState) {
             case WAIT_ROBLOX:
-                // Roblox can report foreground before its resumed surface is
-                // actually ready to receive Accessibility gestures. Give the
-                // client one settled frame window before opening the menu.
+                // A cached foreground package can become Roblox before Android
+                // exposes a real active/focused Accessibility application window.
+                // dispatchGesture() can return true in that gap even though
+                // InputDispatcher later drops the touch. Do not start the settle
+                // timer or consume retries until a live Roblox window/root exists.
+                if (!svc.isRobloxTouchWindowReady()) {
+                    cameraPreflightNextAtMs = 0;
+                    status = "Camera preflight: waiting for touch-ready Roblox window";
+                    return false;
+                }
+                // Once touch-ready, preserve the existing settle window.
                 if (cameraPreflightNextAtMs == 0) {
                     cameraPreflightNextAtMs = now + 900;
                     status = "Camera preflight: settling Roblox";
@@ -153,6 +169,14 @@ once(
             case OPEN_SETTINGS:
                 if (now < cameraPreflightNextAtMs) return false;
                 if (!isRobloxPauseMenuOpen(frame)) {
+                    // If rotation/loading temporarily removes Roblox's actionable
+                    // Accessibility window, wait without burning a retry. A queued
+                    // dispatchGesture is not proof the touch reached Roblox.
+                    if (!svc.isRobloxTouchWindowReady()) {
+                        cameraPreflightNextAtMs = now + 250;
+                        status = "Camera preflight: waiting for touch-ready Roblox window";
+                        return false;
+                    }
                     if (cameraPreflightMenuRetries >= 4) {
                         cameraPreflightState = CameraPreflightState.FAILED;
                         lastError = "Camera preflight could not open Roblox pause menu";
@@ -340,5 +364,48 @@ once(
 ''',
 "preflight state json")
 
+service_once(
+r'''    public boolean isRobloxForeground() {
+        return isRobloxPackageName(activePackageName());
+    }
+
+''',
+r'''    public boolean isRobloxForeground() {
+        return isRobloxPackageName(activePackageName());
+    }
+
+    /**
+     * Stronger than the foreground-package cache: require a current active/focused
+     * Accessibility application window whose live root belongs to Roblox.
+     * This prevents dispatchGesture() from reporting queued-success while Android
+     * still has no touchable Roblox window during launch/rotation.
+     */
+    public boolean isRobloxTouchWindowReady() {
+        try {
+            java.util.List<android.view.accessibility.AccessibilityWindowInfo> windows = getWindows();
+            if (windows == null) return false;
+            for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+                if (window == null
+                        || window.getType() != android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                        || !(window.isActive() || window.isFocused())) {
+                    continue;
+                }
+                AccessibilityNodeInfo root = window.getRoot();
+                if (root == null || root.getPackageName() == null) continue;
+                if (isRobloxPackageName(String.valueOf(root.getPackageName()))) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+''',
+"Roblox touch-ready window gate")
+
+service_p.write_text(service_s)
 p.write_text(s)
-print("PASS: installed Roblox mobile Camera Mode=Classic startup preflight")
+
+verify_service = service_p.read_text()
+verify_macro = p.read_text()
+assert "isRobloxTouchWindowReady()" in verify_service
+assert "waiting for touch-ready Roblox window" in verify_macro
+print("PASS: installed Roblox touch-ready gate + Camera Mode=Classic startup preflight")
