@@ -197,12 +197,12 @@ once(
 
 once(
     '''move(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, "desktop MoveToNextHive: leave current prompt")''',
-    '''moveMobileProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: leave current prompt")''',
+    '''moveMobileSweepProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: leave current prompt")''',
     "mobile leave-hive probe timing")
 
 once(
     '''move(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, "desktop MoveToNextHive: seek next prompt")''',
-    '''moveMobileProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: seek next prompt")''',
+    '''moveMobileSweepProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: seek next prompt")''',
     "mobile next-hive probe timing")
 
 once(
@@ -212,7 +212,36 @@ once(
 
 move_marker='''    private boolean move(Bitmap frame, RevoAccessibilityService svc, Config c, Direction d, double studs, String label) {
 '''
-move_helper='''    // Tiny proximity-search motions need a longer touch hold on Android than
+move_helper='''    // Desktop MoveToNextHive holds Left/Right at full key pressure until the
+    // next hive UI is found. Keep Android's short visual sampling cadence, but
+    // do not weaken lateral stick pressure: WGC showed partial-deflection probes
+    // physically stalling on the raised edge of the neighboring hive platform.
+    private boolean moveMobileSweepProbe(Bitmap frame, RevoAccessibilityService svc, Config c,
+                                         Direction d, double studs, long minimumDurationMs, String label) {
+        long now = SystemClock.elapsedRealtime();
+        long nominalDuration = RevoMovementSpeed.durationMs(
+                studs, c.baseMoveSpeed, c.msPerStud,
+                c.hasteStacks, c.hastePlus, c.coconutHaste, c.bearMorph, c.oil, c.superSmoothie,
+                MAX_GESTURE_MS);
+        long duration = Math.max(minimumDurationMs, nominalDuration);
+        float w = frame.getWidth(), h = frame.getHeight();
+        float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY), r = (float)(Math.min(w, h) * c.joyR);
+        float tx = cx, ty = cy;
+        switch (d) {
+            case FORWARD: ty -= r; break;
+            case BACKWARD: ty += r; break;
+            case LEFT: tx -= r; break;
+            case RIGHT: tx += r; break;
+        }
+        boolean accepted = svc.joystick(displayId, cx, cy, tx, ty, duration);
+        recordGesture(accepted, label + String.format(Locale.US,
+                " %.2f studs %dms nominal=%dms deflection=1.000 sweepFullPressure=1",
+                studs, duration, nominalDuration));
+        nextActionAtMs = now + duration + 80;
+        return accepted;
+    }
+
+    // Tiny proximity-search motions need a longer touch hold on Android than
     // the desktop distance/speed formula produces. Keep long route geometry on
     // desktop timing; apply only a minimum to explicit mobile probe calls.
     private boolean moveMobileProbe(Bitmap frame, RevoAccessibilityService svc, Config c,
