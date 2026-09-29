@@ -418,20 +418,22 @@ helpers = r'''    private boolean isPineTree(String field) {
                 boolean red = r >= 175 && g <= 120 && b <= 115 && r - g >= 65;
                 if (!red) continue;
 
-                int yellow = 0;
-                int yTop = Math.max(y0, y - 18), yBottom = Math.min(y1, y + 48);
-                int xLeft = Math.min(w - 1, x + 28), xRight = Math.min(w - 1, x + 265);
-                for (int yy = yTop; yy <= yBottom && yellow < 10; yy += 4) {
-                    for (int xx = xLeft; xx <= xRight; xx += 4) {
+                // The true Bee detail close square has its yellow title bar
+                // immediately to the right on the same horizontal band. A broad
+                // top-center trade banner can sit over yellow hive scenery and
+                // fooled the old "10 yellow pixels anywhere nearby" check.
+                int yellow = 0, titleSamples = 0;
+                int yTop = Math.max(y0, y - 12), yBottom = Math.min(y1, y + 12);
+                int xLeft = Math.min(w - 1, x + 25), xRight = Math.min(w - 1, x + 245);
+                for (int yy = yTop; yy <= yBottom; yy += 3) {
+                    for (int xx = xLeft; xx <= xRight; xx += 3) {
                         int q = frame.getPixel(xx, yy);
                         int qr=(q>>16)&255, qg=(q>>8)&255, qb=q&255;
-                        if (qr >= 205 && qg >= 165 && qb <= 155 && qr - qb >= 55) {
-                            yellow++;
-                            if (yellow >= 10) break;
-                        }
+                        titleSamples++;
+                        if (qr >= 205 && qg >= 165 && qb <= 155 && qr - qb >= 55) yellow++;
                     }
                 }
-                if (yellow < 10) continue;
+                if (titleSamples == 0 || ((float)yellow / (float)titleSamples) < 0.35f) continue;
 
                 int minX=x, maxX=x, minY=y, maxY=y, redCount=0;
                 int sx0=Math.max(x0, x-35), sx1=Math.min(x1, x+55);
