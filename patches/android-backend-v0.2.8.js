@@ -113,12 +113,42 @@
     const values = {
       gatherPattern: '', seconds: 0, backpackPercent: 0, walkReturn: false,
       invertFB: false, invertLR: false, shiftLock: false, zoom: 0,
-      length: 5, width: 5, distance: 0, alignment: 0, repetitions: 0,
+      // Revolution's embedded e_lol.lua declares SetWidth(2), SetLength(8).
+      // Android previously seeded 5x5 here, which made the recovered e_lol
+      // sweep roughly 125 studs laterally and pushed Sunflower gathers outside.
+      length: 8, width: 2, distance: 0, alignment: 0, repetitions: 0,
       driftComp: true, position: 'center', yaw: 0, pitch: 0
     };
     for (const [k, v] of Object.entries(values)) {
       if (config.Concrete(k) === undefined) config.Set(k, v);
     }
+  }
+
+  function migrateAndroidSeededElolDimensions() {
+    const lists = patternLists();
+    if (!lists || !lists.active || !Array.isArray(lists.active.values)) return 0;
+    let changed = 0;
+    for (const entry of lists.active.values) {
+      const item = entry && entry.object ? entry.object : entry;
+      if (!item || typeof item.Object !== 'function') continue;
+      const config = item.Object('config');
+      if (!config || typeof config.Concrete !== 'function') continue;
+      const pattern = String(config.Concrete('gatherPattern') || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const width = Number(config.Concrete('width'));
+      const length = Number(config.Concrete('length'));
+      // Only migrate the exact Android v0.2.8 sentinel. Any other values may
+      // be intentional user configuration and must be preserved.
+      if (pattern === 'elol' && width === 5 && length === 5) {
+        config.Set('width', 2);
+        config.Set('length', 8);
+        changed++;
+      }
+    }
+    if (changed) {
+      try { lists.active.Flush(); } catch (_) {}
+      emitLog('INFO', 'Migrated Android-seeded e_lol dimensions from 5x5 to desktop 2x8', 'GATHER');
+    }
+    return changed;
   }
 
   function uniqueFieldId(field, active) {
@@ -419,7 +449,9 @@
     window.RevoAndroidDebug.ensurePlanterTerminalState = ensurePlanterTerminalState;
     window.RevoAndroidDebug.addDefaultField = addDefaultField;
     window.RevoAndroidDebug.deleteField = deleteField;
+    window.RevoAndroidDebug.migrateAndroidSeededElolDimensions = migrateAndroidSeededElolDimensions;
 
+    migrateAndroidSeededElolDimensions();
     installTooltips();
     configureDiscordForAndroid();
     emitLog('SUCCESS', `Revolution Android backend ${VERSION} ready`, 'ANDROID');
