@@ -454,10 +454,46 @@ helpers = r'''    private boolean isPineTree(String field) {
         return "sunflower".equals(n) || "sunflowerfield".equals(n);
     }
 
+    private static final int[] MOBILE_BLACK_BEAR_TEXT_X =
+            new int[]{463, 428, 469, 504, 519, 544, 504};
+    private static final int[] MOBILE_BLACK_BEAR_TEXT_Y =
+            new int[]{109, 118, 120, 120, 123, 126, 127};
+
+    private boolean isMobileBlackBearPrompt(Bitmap frame) {
+        if (!isMobileTapPrompt(frame)) return false;
+
+        int fw = frame.getWidth(), fh = frame.getHeight();
+        float sx = fw / 960.0f, sy = fh / 540.0f;
+        int radius = Math.max(1, Math.round(Math.min(sx, sy) * 2.0f));
+        int matched = 0;
+
+        for (int i = 0; i < MOBILE_BLACK_BEAR_TEXT_X.length; i++) {
+            int cx = Math.max(0, Math.min(fw - 1, Math.round(MOBILE_BLACK_BEAR_TEXT_X[i] * sx)));
+            int cy = Math.max(0, Math.min(fh - 1, Math.round(MOBILE_BLACK_BEAR_TEXT_Y[i] * sy)));
+            boolean found = false;
+            for (int yy = Math.max(0, cy - radius); yy <= Math.min(fh - 1, cy + radius) && !found; yy++) {
+                for (int xx = Math.max(0, cx - radius); xx <= Math.min(fw - 1, cx + radius); xx++) {
+                    int p = frame.getPixel(xx, yy);
+                    int r=(p>>16)&255, g=(p>>8)&255, b=p&255;
+                    int hi=Math.max(r,Math.max(g,b)), lo=Math.min(r,Math.min(g,b));
+                    if (lo >= 205 && hi - lo <= 38) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (found) matched++;
+        }
+
+        // Saved 960x540 QA: real "Talk to Black Bear" = 7/7.
+        // Claim Hive, Make Honey, occupied-hive and live Send Trade Request = 0/7.
+        return matched >= 5;
+    }
+
     private boolean beginSunflowerFromMobileBlackBear(Bitmap frame,
                                                        RevoAccessibilityService svc,
                                                        String label) {
-        if (!isMobileTapPrompt(frame)) return false;
+        if (!isMobileBlackBearPrompt(frame)) return false;
         lastTemplate = "mobile-black-bear";
         blackBearCheckpointAttempts = 0;
         if (setYaw(frame, svc, 0, 0, label + " -> SetYaw(0)")) {
