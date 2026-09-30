@@ -376,9 +376,6 @@ once(
         }
         // Measured on real 960x540 BlueStacks frames:
         // Follow=0/104, Classic=104/104, Default(Follow)=19/104.
-        android.util.Log.i("RevoCamera", "classic-score=" + matched
-                + "/" + CAMERA_CLASSIC_X.length
-                + " frame=" + fw + "x" + fh);
         return matched >= 76;
     }
 

@@ -14,6 +14,7 @@ on:
       - 'tools/patch-native-v0212-camera-preflight.py'
       - 'tools/patch-native-v0212-screenshot-orientation.py'
       - 'tools/patch-native-v0212-tap-callback.py'
+      - 'tools/patch-native-v0212-webview-renderer-survival.py'
       - 'tools/patch-native-v0212-capture-throttle.py'
       - 'tools/patch-native-v0212-field-routing.py'
       - 'tools/patch-native-v0212-remote-agent.py'
@@ -89,6 +90,7 @@ jobs:
           python3 tools/patch-native-v0212-camera-preflight.py
           python3 tools/patch-native-v0212-screenshot-orientation.py
           python3 tools/patch-native-v0212-tap-callback.py
+          python3 tools/patch-native-v0212-webview-renderer-survival.py
           python3 tools/patch-native-v0212-capture-throttle.py
           python3 tools/patch-native-v0212-jump-after-acquire.py
           python3 -m py_compile \
@@ -100,6 +102,7 @@ jobs:
             tools/patch-native-v0212-camera-preflight.py \
             tools/patch-native-v0212-screenshot-orientation.py \
             tools/patch-native-v0212-tap-callback.py \
+            tools/patch-native-v0212-webview-renderer-survival.py \
             tools/patch-native-v0212-capture-throttle.py \
             tools/patch-native-v0212-field-routing.py \
             tools/patch-native-v0212-remote-agent.py \
@@ -125,6 +128,7 @@ jobs:
           grep -q 'isRobloxTouchWindowReady' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'screenshot-orientation-normalize-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'tap-callback-diagnostics-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'webview-renderer-survival-v1' revo-android/app/src/main/java/com/revolution/android/LocalAssetWebViewClient.java
           grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'class RevoMovementSpeed' revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
           grep -q 'step.studs, c.baseMoveSpeed, c.msPerStud' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
