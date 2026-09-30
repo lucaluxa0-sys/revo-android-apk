@@ -26,6 +26,7 @@ on:
       - 'tools/patch-native-v0212-jump-after-acquire.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
+      - 'tools/patch-native-v0212-sunflower-gather-footprint.py'
       - 'tools/patch-revo-frontend-v028.py'
       - 'tools/recover-vite-pngs.js'
       - 'revo-android/extract_revo_frontend.py'
@@ -95,6 +96,7 @@ jobs:
           python3 tools/patch-native-v0212-background-webview-release.py
           python3 tools/patch-native-v0212-capture-throttle.py
           python3 tools/patch-native-v0212-jump-after-acquire.py
+          python3 tools/patch-native-v0212-sunflower-gather-footprint.py
           python3 -m py_compile \
             tools/patch-native-v0211-bee-swarm-launch.py \
             tools/patch-native-v0212-hive-routing.py \
@@ -115,7 +117,8 @@ jobs:
             tools/patch-native-v0212-joystick-callback-thread.py \
             tools/patch-native-v0212-jump-after-acquire.py \
             tools/patch-native-v0212-joystick-prequeue-continuation.py \
-            tools/patch-native-v0212-movement-speed.py
+            tools/patch-native-v0212-movement-speed.py \
+            tools/patch-native-v0212-sunflower-gather-footprint.py
           grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'landscape-joystick-calibration-v1' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
@@ -136,6 +139,8 @@ jobs:
           grep -q 'pkg=%s • route=%s' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'class RevoMovementSpeed' revo-android/app/src/main/java/com/revolution/android/RevoMovementSpeed.java
           grep -q 'step.studs, c.baseMoveSpeed, c.msPerStud' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'sunflower-mobile-footprint-v1' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          grep -q 'physicalPatternLength = Math.min(length, 4.0)' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'class RevoRemoteAgent' revo-android/app/src/main/java/com/revolution/android/RevoRemoteAgent.java
           grep -q 'PORT = 38421' revo-android/app/src/main/java/com/revolution/android/RevoRemoteAgent.java
           grep -q 'android.permission.INTERNET' revo-android/app/src/main/AndroidManifest.xml
