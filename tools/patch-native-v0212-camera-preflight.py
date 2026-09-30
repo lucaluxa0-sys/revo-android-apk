@@ -283,9 +283,9 @@ once(
         final int rightEdges = hudRadialContrastCount(frame, rightCx, cy, scale);
 
         // Measured on the real BlueStacks load sequence at 960x540:
-        // joining/loading maxed at 14/16 strong samples; live gameplay was
-        // 43+/26. Keep conservative margins and require both mobile controls.
-        return leftEdges >= 28 && rightEdges >= 20;
+        // joining/loading maxed at 14/16 strong samples. Current live gameplay
+        // measured 43/16; keep the left control as the strong discriminator.
+        return leftEdges >= 28 && rightEdges >= 12;
     }
 
     private int hudRadialContrastCount(Bitmap frame, int cx, int cy, float scale) {
