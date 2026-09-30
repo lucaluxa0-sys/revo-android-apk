@@ -186,7 +186,7 @@ once(
 ''',
 '''    // Android screenshot delivery on emulators/phones can be much slower than desktop frame polling.
     // Keep desktop geometry, but allow enough time to observe the next mobile proximity prompt.
-    private static final long SLOT_TIMEOUT_MS = 15_000;
+    private static final long SLOT_TIMEOUT_MS = 20_000;
 ''',
 "mobile hive timeout adaptation")
 
