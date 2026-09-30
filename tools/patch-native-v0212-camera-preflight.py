@@ -45,6 +45,7 @@ once(
     private volatile int cameraPreflightTaps = 0;
     private volatile int cameraPreflightMenuRetries = 0;
     private volatile int cameraPreflightGameplayReadyFrames = 0;
+    private volatile long cameraPreflightArrowTapFrameCount = -1;
     private volatile boolean routeStarted = false;
 
     private volatile Thread worker;
@@ -64,6 +65,7 @@ once(
         cameraPreflightTaps = 0;
         cameraPreflightMenuRetries = 0;
         cameraPreflightGameplayReadyFrames = 0;
+        cameraPreflightArrowTapFrameCount = -1;
         status = "Starting camera preflight";
 ''',
 "start preflight")
@@ -235,6 +237,18 @@ once(
 
             case SEEK_CLASSIC:
                 if (now < cameraPreflightNextAtMs) return false;
+                // Accessibility reports the arrow tap completed before Roblox's
+                // rendered text is guaranteed to reach the screenshot pipeline.
+                // Skip the first successful post-tap frame and only evaluate the
+                // second fresh frame; frameCount advances only on successful captures.
+                if (cameraPreflightArrowTapFrameCount >= 0) {
+                    long freshFrames = frameCount.get() - cameraPreflightArrowTapFrameCount;
+                    if (freshFrames < 2) {
+                        status = "Camera preflight: waiting for fresh mode frame " + freshFrames + "/2";
+                        return false;
+                    }
+                    cameraPreflightArrowTapFrameCount = -1;
+                }
                 if (isCameraClassic(frame)) {
                     // Toggle the Roblox menu closed.
                     svc.tap(displayId, w * 0.0604167f, h * 0.0962963f, 35);
@@ -253,6 +267,7 @@ once(
                 // Camera Mode right-arrow. Cycle until explicit "Classic" is visible.
                 svc.tap(displayId, w * 0.9083333f, h * 0.4314815f, 35);
                 cameraPreflightTaps++;
+                cameraPreflightArrowTapFrameCount = frameCount.get();
                 cameraPreflightNextAtMs = now + 450;
                 status = "Camera preflight: cycling mode " + cameraPreflightTaps;
                 return false;
