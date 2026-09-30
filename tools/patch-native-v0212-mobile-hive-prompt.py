@@ -174,6 +174,16 @@ new_center = """                if (m != null) {
                         if (tapInteraction(frame, svc, c, m, "mobile Tap: claim center hive")) {
                             transitionDelay(State.CLAIM_CENTER_WAIT, 450);
                         }
+                    } else if ("mobileoccupied".equals(m.name)) {
+                        // Mobile occupied-hive proximity is depth-sensitive: one
+                        // ~2-stud backward step is enough to make the Tap/Trade
+                        // banner disappear. Preserve this prompt-positive depth
+                        // and begin the lateral sweep directly.
+                        checkDirection = -1;
+                        checkedHives = 1;
+                        checkingHive = 3;
+                        checkSkip = 0;
+                        transition(State.SWEEP_PREPARE, "mobile-center-hive-occupied-no-backoff");
                     } else if (move(frame, svc, c, Direction.BACKWARD, 2.0, "desktop ClaimHive: Backward 2")) {
                         transitionAfterGesture(State.BACK_OFF_INITIAL);
                     }
