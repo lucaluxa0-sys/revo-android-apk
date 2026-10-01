@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from pathlib import Path
 
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-edge203-hive3-cannon-low-v1"
+MARKER = "v09c-edge203-hive3-cannon-low-no-parachute-v2"
 if MARKER in s:
     raise SystemExit("v0.9c hive3 cannon patch already applied")
 
@@ -20,8 +20,6 @@ once(
 """,
 """        CLAIMED,
         V09C_H3_BACK_2,
-        V09C_H3_PARACHUTE_JUMP_1,
-        V09C_H3_PARACHUTE_GLIDE_RIGHT,
         V09C_H3_RIGHT_4,
         V09C_H3_JUMP_CANNON_RIGHT_20,
         V09C_H3_JUMP_CANNON_RIGHT_8,
@@ -64,7 +62,7 @@ claimed_new = """                // Narrow source-grounded v0.9c-hotfix3 route e
                 // into the hive wall), so preserve the edge's world displacement
                 // by mapping only this initial Forward/Backward pair accordingly.
                 if (isSunflower(c.field) && claimedHive == 3) {
-                    Log.i(TAG, "routeMarker=""" + MARKER + """ edge=203 alignment=low");
+                    Log.i(TAG, "routeMarker=""" + MARKER + """ edge=203 alignment=medium parachute=disabled parachute=disabled");
                     if (move(frame, svc, c, Direction.BACKWARD, 20.0,
                             "v0.9c edge203 Forward20 -> mobile Backward20")) {
                         v09cCannonProbeStuds = 0.0;
@@ -90,50 +88,18 @@ cases = r'''            case V09C_H3_BACK_2:
                 // orientation adaptation used for Forward20 above.
                 if (move(frame, svc, c, Direction.FORWARD, 2.0,
                         "v0.9c edge203 Back2 -> mobile Forward2")) {
-                    transitionAfterGesture(State.V09C_H3_PARACHUTE_JUMP_1);
+                    transitionAfterGesture(State.V09C_H3_ALIGN_RIGHT_80);
                 }
                 break;
-            case V09C_H3_PARACHUTE_JUMP_1: {
-                // Exact simple Parachute(Direction.Right) timing recovered from
-                // v0.9c-hotfix3 RevolutionMacro.exe:
-                // Space down 100ms; second jump begins ~400ms after the first.
-                float jumpX = (float)(frame.getWidth() * c.jumpX);
-                float jumpY = (float)(frame.getHeight() * c.jumpY);
-                boolean accepted = svc.tap(displayId, jumpX, jumpY, 100);
-                recordGesture(accepted,
-                        "v0.9c edge203 Parachute(Right): first Space 100ms");
-                if (accepted) {
-                    transitionDelay(State.V09C_H3_PARACHUTE_GLIDE_RIGHT, 400);
-                } else {
-                    nextActionAtMs = now + 180;
-                }
-                break;
-            }
-            case V09C_H3_PARACHUTE_GLIDE_RIGHT: {
-                // At the second jump, Right begins and remains held through the
-                // recovered ~750ms parachute glide. Android needs 35ms to acquire
-                // the joystick; joystickWithTimedTaps deliberately fires the jump
-                // immediately after that acquisition.
-                float w = frame.getWidth(), h = frame.getHeight();
-                float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY);
-                float r = (float)(Math.min(w, h) * c.joyR);
-                float jumpX = (float)(w * c.jumpX), jumpY = (float)(h * c.jumpY);
-                boolean accepted = svc.joystickWithTimedTaps(
-                        displayId, cx, cy, cx + r, cy,
-                        850, jumpX, jumpY, 100, new long[]{0L});
-                recordGesture(accepted,
-                        "v0.9c edge203 Parachute(Right): second Space + Right glide 850ms");
-                nextActionAtMs = now + 930;
-                if (accepted) transitionKeepDeadline(State.V09C_H3_RIGHT_4);
-                break;
-            }
-            case V09C_H3_RIGHT_4:
-                if (move(frame, svc, c, Direction.RIGHT, 4.0,
-                        "v0.9c edge203 low alignment: Walk Right 4")) {
+            case V09C_H3_ALIGN_RIGHT_80:
+                // This account has no parachute. Use Revolution v0.9c's original
+                // non-parachute ExecuteWithAlignment Medium branch instead of the
+                // Low branch Parachute(Right) + Walk Right4.
+                if (move(frame, svc, c, Direction.RIGHT, 80.0,
+                        "v0.9c edge203 Medium alignment: Right80 (parachute disabled)")) {
                     transitionAfterGesture(State.V09C_H3_JUMP_CANNON_RIGHT_20);
                 }
-                break;
-            case V09C_H3_JUMP_CANNON_RIGHT_20:
+                break;            case V09C_H3_JUMP_CANNON_RIGHT_20:
                 // jump_cannon.lua: KeyDown(Right); SleepStuds(20)
                 if (move(frame, svc, c, Direction.RIGHT, 20.0,
                         "v0.9c jump_cannon: Right 20")) {
@@ -189,7 +155,7 @@ cases = r'''            case V09C_H3_BACK_2:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-edge203-hive3-cannon-low-v1"
+                Log.i(TAG, "routeMarker=v09c-edge203-hive3-cannon-low-no-parachute-v2"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c edge203 bounded cannon endpoint; Press E unavailable");
@@ -206,7 +172,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-edge203-hive3-cannon-low-v1");
+"""            r.put("v09cHive3CannonRoute", "v09c-edge203-hive3-cannon-low-no-parachute-v2");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
@@ -214,3 +180,4 @@ once(
 
 p.write_text(s, encoding="utf-8")
 print("PASS: installed " + MARKER)
+
