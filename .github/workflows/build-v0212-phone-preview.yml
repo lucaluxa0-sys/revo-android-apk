@@ -25,6 +25,7 @@ on:
       - 'tools/patch-native-v0212-joystick-callback-thread.py'
       - 'tools/patch-native-v0212-jump-after-acquire.py'
       - 'tools/patch-native-v0212-v09c-hive3-cannon.py'
+      - 'tools/patch-native-v0212-route203-test-package.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
       - 'tools/patch-native-v0212-sunflower-gather-footprint.py'
@@ -119,6 +120,7 @@ jobs:
             tools/patch-native-v0212-joystick-callback-thread.py \
             tools/patch-native-v0212-jump-after-acquire.py \
             tools/patch-native-v0212-v09c-hive3-cannon.py \
+            tools/patch-native-v0212-route203-test-package.py \
             tools/patch-native-v0212-joystick-prequeue-continuation.py \
             tools/patch-native-v0212-movement-speed.py \
             tools/patch-native-v0212-sunflower-gather-footprint.py
@@ -216,6 +218,11 @@ jobs:
           assert n==1
           p.write_text(s)
           PY
+          # This branch-only package ID lets runtime route QA coexist with the
+          # signed stable Revo install without uninstalling or touching its data.
+          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" ]]; then
+            python3 tools/patch-native-v0212-route203-test-package.py
+          fi
 
       - name: Build and verify phone preview APK
         shell: bash
@@ -228,6 +235,9 @@ jobs:
           test -s "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "versionName='0.2.12-phone-preview'" /tmp/badging.txt
+          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" ]]; then
+            grep -q "package: name='com.revolution.android.route203test'" /tmp/badging.txt
+          fi
           unzip -p "$APK" assets/www/android-wails-shim.js > /tmp/apk-android-wails-shim.js
           grep -q "'e_lol'" /tmp/apk-android-wails-shim.js
           grep -q "const baseMoveSpeed = positiveNumber(player.Concrete('moveSpeed'), 24);" /tmp/apk-android-wails-shim.js
