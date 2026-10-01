@@ -134,8 +134,8 @@ jobs:
           grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'continuationQueue=prequeued-before-acquire-completion-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
-          grep -q 'v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
-          grep -q 'edges202-406-468:no-cannon:no-parachute' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'v09c-hive234-sunflower-no-parachute-v8-h2-blackbear' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
+          grep -q 'edges202-397-59:no-cannon:no-parachute' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -Fq 'claimedHive == 4 ? 118.0 : 80.0' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           ! grep -q 'V09C_H3_PARACHUTE_' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java

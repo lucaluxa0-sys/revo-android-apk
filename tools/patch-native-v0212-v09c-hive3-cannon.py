@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis"
+MARKER = "v09c-hive234-sunflower-no-parachute-v8-h2-blackbear"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -20,6 +20,12 @@ once(
 """,
 """        CLAIMED,
         V09C_H2_SPAWN_FORWARD_25,
+        V09C_H2_BLACK_BEAR_YAW_2,
+        V09C_H2_BLACK_BEAR_FORWARD_42,
+        V09C_H2_BLACK_BEAR_DIAG_36,
+        V09C_H2_BLACK_BEAR_FORWARD_57,
+        V09C_H2_BLACK_BEAR_CHECKPOINT_WALK,
+        V09C_H2_BLACK_BEAR_CHECKPOINT_DETECT,
         V09C_H2_TICKET_YAW_4,
         V09C_H2_TICKET_FORWARD_20,
         V09C_H2_TICKET_RIGHT_10,
@@ -68,10 +74,11 @@ claimed_anchor = """                // Mobile spawns facing the hive wall. Back 
 """
 claimed_new = """                // This account has no parachute and the generic cannon fallback was
                 // visually disproven for hive2. Use the shortest decoded v0.9c path
-                // that contains neither a cannon node nor Parachute():
-                // edge202 hive2->spawn, edge406 spawn->ticket, edge468 ticket->sunflower-tr.
+                // that contains neither a cannon node nor Parachute(). The shorter ticket
+                // route was visually disproven on Android, so use edge202 hive2->spawn,
+                // edge397 spawn->black-bear, then the already-ported edge59 black-bear->sunflower-tr.
                 if (isSunflower(c.field) && claimedHive == 2) {
-                    Log.i(TAG, "routeMarker=""" + MARKER + """ edges=202,406,468 cannon=disabled parachute=disabled");
+                    Log.i(TAG, "routeMarker=""" + MARKER + """ edges=202,397,59 cannon=disabled parachute=disabled");
                     // edge202 Medium: WalkAsync(Left,50) concurrently with Walk(Backward,75).
                     // Live WGC from hive2 showed the prior mobile Forward mapping drove directly
                     // into the hive honeycomb wall. Preserve desktop Backward for hive2
@@ -119,9 +126,56 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 // Keep the same hive2 vertical mapping verified by the first edge202 leg.
                 if (move(frame, svc, c, Direction.BACKWARD, 25.0,
                         "v0.9c edge202 Medium: desktop Backward remainder25 -> mobile Backward25")) {
-                    transitionAfterGesture(State.V09C_H2_TICKET_YAW_4);
+                    blackBearCheckpointAttempts = 0;
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_YAW_2);
                 }
                 break;
+            case V09C_H2_BLACK_BEAR_YAW_2:
+                // v0.9c edge397 spawn.black-bear begins at yaw slot 2.
+                if (setYaw(frame, svc, 2, 0, "v0.9c edge397 spawn.black-bear: SetYaw(2)")) {
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_42);
+                }
+                break;
+            case V09C_H2_BLACK_BEAR_FORWARD_42:
+                // Walk timeline: Forward 0..42.
+                if (moveField(frame, svc, c, Direction.FORWARD, 42.0,
+                        "v0.9c edge397: Forward42")) {
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_DIAG_36);
+                }
+                break;
+            case V09C_H2_BLACK_BEAR_DIAG_36:
+                // Walk timeline: Forward+Left from stud 42 to 78.
+                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.LEFT, 36.0,
+                        "v0.9c edge397: Forward+Left36")) {
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_57);
+                }
+                break;
+            case V09C_H2_BLACK_BEAR_FORWARD_57:
+                // Walk timeline: Forward from stud 78 to 135.
+                if (moveField(frame, svc, c, Direction.FORWARD, 57.0,
+                        "v0.9c edge397: Forward57")) {
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_CHECKPOINT_WALK);
+                }
+                break;
+            case V09C_H2_BLACK_BEAR_CHECKPOINT_WALK:
+                // edge397 Checkpoint WalkDetector(interaction, Forward,10).
+                if (moveField(frame, svc, c, Direction.FORWARD, 10.0,
+                        "v0.9c edge397: Black Bear checkpoint Forward10")) {
+                    transitionAfterGesture(State.V09C_H2_BLACK_BEAR_CHECKPOINT_DETECT);
+                }
+                break;
+            case V09C_H2_BLACK_BEAR_CHECKPOINT_DETECT:
+                if (beginSunflowerFromMobileBlackBear(frame, svc,
+                        "v0.9c edge397 Black Bear prompt")) break;
+                blackBearCheckpointAttempts++;
+                if (blackBearCheckpointAttempts <= 3) {
+                    if (moveField(frame, svc, c, Direction.FORWARD, 5.0,
+                            "v0.9c edge397 checkpoint Nudge Forward5 attempt " + blackBearCheckpointAttempts)) {
+                        transitionAfterGesture(State.V09C_H2_BLACK_BEAR_CHECKPOINT_DETECT);
+                    }
+                    break;
+                }
+                return fail("v0.9c edge397 Black Bear prompt not found after 3 nudges");
             case V09C_H2_TICKET_YAW_4:
                 // edge406 spawn.ticket
                 if (setYaw(frame, svc, 4, 0, "v0.9c edge406 spawn.ticket: SetYaw(4)")) {
@@ -272,7 +326,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v8-h2-blackbear"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -289,8 +343,8 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis");
-            r.put("v09cHive2DirectRoute", "edges202-406-468:no-cannon:no-parachute");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v8-h2-blackbear");
+            r.put("v09cHive2DirectRoute", "edges202-397-59:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
