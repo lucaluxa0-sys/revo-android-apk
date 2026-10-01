@@ -237,21 +237,21 @@ move_helper='''    // Lateral hive-to-hive traversal needs enough joystick press
         float proportional = duration > 0L
                 ? Math.max(0.05f, Math.min(1.0f, (float)nominalDuration / (float)duration))
                 : 1.0f;
-        float deflectionScale = Math.max(0.85f, proportional);
+        float sweepDeflectionScale = Math.max(0.85f, proportional);
         float w = frame.getWidth(), h = frame.getHeight();
         float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY), r = (float)(Math.min(w, h) * c.joyR);
-        float probeR = r * deflectionScale;
+        float sweepProbeR = r * sweepDeflectionScale;
         float tx = cx, ty = cy;
         switch (d) {
-            case FORWARD: ty -= probeR; break;
-            case BACKWARD: ty += probeR; break;
-            case LEFT: tx -= probeR; break;
-            case RIGHT: tx += probeR; break;
+            case FORWARD: ty -= sweepProbeR; break;
+            case BACKWARD: ty += sweepProbeR; break;
+            case LEFT: tx -= sweepProbeR; break;
+            case RIGHT: tx += sweepProbeR; break;
         }
         boolean accepted = svc.joystick(displayId, cx, cy, tx, ty, duration);
         recordGesture(accepted, label + String.format(Locale.US,
                 " %.2f studs %dms nominal=%dms deflection=%.3f sweepClamp=0.85",
-                studs, duration, nominalDuration, deflectionScale));
+                studs, duration, nominalDuration, sweepDeflectionScale));
         nextActionAtMs = now + duration + 80;
         return accepted;
     }
