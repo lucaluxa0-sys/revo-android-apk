@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive34-cannon-medium-no-parachute-v3"
+MARKER = "v09c-hive234-sunflower-no-parachute-v4"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -19,6 +19,17 @@ once(
         CANNON_FORWARD,
 """,
 """        CLAIMED,
+        V09C_H2_SPAWN_FORWARD_25,
+        V09C_H2_TICKET_YAW_4,
+        V09C_H2_TICKET_FORWARD_20,
+        V09C_H2_TICKET_RIGHT_10,
+        V09C_H2_TICKET_FORWARD_80,
+        V09C_H2_TICKET_LEFT_10,
+        V09C_H2_SUNFLOWER_YAW_4,
+        V09C_H2_SUNFLOWER_LEFT_71,
+        V09C_H2_SUNFLOWER_DIAG_71,
+        V09C_H2_SUNFLOWER_ALIGN_LEFT_30,
+        V09C_H2_SUNFLOWER_ALIGN_BACKWARD_30,
         V09C_H3_BACK_2,
         V09C_H3_ALIGN_RIGHT_80,
         V09C_H3_JUMP_CANNON_RIGHT_20,
@@ -55,7 +66,24 @@ claimed_anchor = """                // Mobile spawns facing the hive wall. Back 
                 }
                 break;
 """
-claimed_new = """                // Narrow source-grounded v0.9c-hotfix3 routes:
+claimed_new = """                // This account has no parachute and the generic cannon fallback was
+                // visually disproven for hive2. Use the shortest decoded v0.9c path
+                // that contains neither a cannon node nor Parachute():
+                // edge202 hive2->spawn, edge406 spawn->ticket, edge468 ticket->sunflower-tr.
+                if (isSunflower(c.field) && claimedHive == 2) {
+                    Log.i(TAG, "routeMarker=""" + MARKER + """ edges=202,406,468 cannon=disabled parachute=disabled");
+                    // edge202 Medium: WalkAsync(Left,50) concurrently with Walk(Backward,75).
+                    // The claimed-hive Android camera reverses desktop Forward/Backward
+                    // (already proven by the hive3/4 route), so desktop Backward becomes
+                    // mobile Forward here while the horizontal Left component is preserved.
+                    if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.LEFT, 50.0,
+                            "v0.9c edge202 Medium: desktop Backward+Left50 -> mobile Forward+Left50")) {
+                        transitionAfterGesture(State.V09C_H2_SPAWN_FORWARD_25);
+                    }
+                    break;
+                }
+
+                // Narrow source-grounded v0.9c-hotfix3 routes:
                 // edge203 hive3 -> cannon and edge205 hive4 -> cannon.
                 // Both desktop edges begin Forward20, Back2.
                 // Live Android QA established that the claimed-hive mobile camera
@@ -86,7 +114,85 @@ claimed_new = """                // Narrow source-grounded v0.9c-hotfix3 routes:
 """
 once(claimed_anchor, claimed_new, "CLAIMED branch")
 
-cases = r'''            case V09C_H3_BACK_2:
+cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
+                // Finish edge202 Medium Backward75 after the concurrent first 50 studs.
+                // Claimed-hive mobile Forward/Backward is reversed, so desktop Backward25
+                // maps to mobile Forward25.
+                if (move(frame, svc, c, Direction.FORWARD, 25.0,
+                        "v0.9c edge202 Medium: desktop Backward remainder25 -> mobile Forward25")) {
+                    transitionAfterGesture(State.V09C_H2_TICKET_YAW_4);
+                }
+                break;
+            case V09C_H2_TICKET_YAW_4:
+                // edge406 spawn.ticket
+                if (setYaw(frame, svc, 4, 0, "v0.9c edge406 spawn.ticket: SetYaw(4)")) {
+                    transitionAfterGesture(State.V09C_H2_TICKET_FORWARD_20);
+                }
+                break;
+            case V09C_H2_TICKET_FORWARD_20:
+                // Walk({[0]=Forward,[20]=Right,[30]=Forward,[110]=Left,[120]=End})
+                if (moveField(frame, svc, c, Direction.FORWARD, 20.0,
+                        "v0.9c edge406: Forward20")) {
+                    transitionAfterGesture(State.V09C_H2_TICKET_RIGHT_10);
+                }
+                break;
+            case V09C_H2_TICKET_RIGHT_10:
+                if (moveField(frame, svc, c, Direction.RIGHT, 10.0,
+                        "v0.9c edge406: Right10")) {
+                    transitionAfterGesture(State.V09C_H2_TICKET_FORWARD_80);
+                }
+                break;
+            case V09C_H2_TICKET_FORWARD_80:
+                if (moveField(frame, svc, c, Direction.FORWARD, 80.0,
+                        "v0.9c edge406: Forward80")) {
+                    transitionAfterGesture(State.V09C_H2_TICKET_LEFT_10);
+                }
+                break;
+            case V09C_H2_TICKET_LEFT_10:
+                if (moveField(frame, svc, c, Direction.LEFT, 10.0,
+                        "v0.9c edge406: Left10")) {
+                    transitionAfterGesture(State.V09C_H2_SUNFLOWER_YAW_4);
+                }
+                break;
+            case V09C_H2_SUNFLOWER_YAW_4:
+                // edge468 ticket.sunflower-tr
+                if (setYaw(frame, svc, 4, 0, "v0.9c edge468 ticket.sunflower-tr: SetYaw(4)")) {
+                    transitionAfterGesture(State.V09C_H2_SUNFLOWER_LEFT_71);
+                }
+                break;
+            case V09C_H2_SUNFLOWER_LEFT_71:
+                // Walk({[0]=Left,[71]={Backward,Left},[142]=End})
+                if (moveField(frame, svc, c, Direction.LEFT, 71.0,
+                        "v0.9c edge468: Left71")) {
+                    transitionAfterGesture(State.V09C_H2_SUNFLOWER_DIAG_71);
+                }
+                break;
+            case V09C_H2_SUNFLOWER_DIAG_71:
+                if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.LEFT, 71.0,
+                        "v0.9c edge468: Backward+Left71")) {
+                    transitionAfterGesture(State.V09C_H2_SUNFLOWER_ALIGN_LEFT_30);
+                }
+                break;
+            case V09C_H2_SUNFLOWER_ALIGN_LEFT_30:
+                // Walk({[0]={Left,Align},[30]={Backward,Align},[60]=End}).
+                // Existing Android routes port WalkAlign as directional motion with
+                // route timing, so preserve that same convention here.
+                if (moveField(frame, svc, c, Direction.LEFT, 30.0,
+                        "v0.9c edge468: WalkAlign Left30")) {
+                    transitionAfterGesture(State.V09C_H2_SUNFLOWER_ALIGN_BACKWARD_30);
+                }
+                break;
+            case V09C_H2_SUNFLOWER_ALIGN_BACKWARD_30:
+                if (moveField(frame, svc, c, Direction.BACKWARD, 30.0,
+                        "v0.9c edge468: WalkAlign Backward30")) {
+                    // edge468 ends at sunflower-tr. Reuse the existing visually
+                    // established mobile center correction before e_lol starts.
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_CENTER_RIGHT);
+                    Log.i(TAG, "DIRECT_FIELD_ROUTE_REACHED endpoint=sunflower-tr edges=202,406,468");
+                }
+                break;
+            case V09C_H3_BACK_2:
+
                 // Desktop edge203 Backward2 under the same claimed-hive mobile
                 // orientation adaptation used for Forward20 above.
                 if (move(frame, svc, c, Direction.FORWARD, 2.0,
@@ -165,7 +271,7 @@ cases = r'''            case V09C_H3_BACK_2:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive34-cannon-medium-no-parachute-v3"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v4"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -182,7 +288,8 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive34-cannon-medium-no-parachute-v3");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v4");
+            r.put("v09cHive2DirectRoute", "edges202-406-468:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
