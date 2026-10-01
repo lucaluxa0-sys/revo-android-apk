@@ -124,7 +124,7 @@ jobs:
             tools/patch-native-v0212-joystick-prequeue-continuation.py \
             tools/patch-native-v0212-movement-speed.py \
             tools/patch-native-v0212-sunflower-gather-footprint.py
-          grep -q 'roblox://placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
+          grep -q 'roblox://experiences/start?placeId=1537690962' revo-android/app/src/main/java/com/revolution/android/AndroidRevoBridge.java
           grep -q 'class RevoPreGatherRouter' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'landscape-joystick-calibration-v1' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
