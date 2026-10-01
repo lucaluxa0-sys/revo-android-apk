@@ -38,7 +38,7 @@ launch_pat = re.compile(
     re.S,
 )
 launch_repl = '''@JavascriptInterface public boolean launchRoblox() {
-        final String beeSwarmUri = "roblox://experiences/start?placeId=1537690962";
+        final String beeSwarmUri = "roblox://placeId=1537690962";
         String[] packages = new String[]{"com.roblox.client", "com.roblox.client.samsunggalaxy"};
         for (String pkg : packages) {
             // Keep the existing package-presence probe, but launch the actual Bee Swarm
@@ -68,7 +68,7 @@ s, n = launch_pat.subn(launch_repl, s)
 if n != 1:
     raise SystemExit(f'expected exactly one launchRoblox replacement, got {n}')
 
-if 'roblox://experiences/start?placeId=1537690962' not in s:
+if 'roblox://placeId=1537690962' not in s:
     raise SystemExit('Bee Swarm URI missing after patch')
 if 'Macro engine attached to existing Roblox foreground' not in s:
     raise SystemExit('live Roblox attach guard missing after patch')
