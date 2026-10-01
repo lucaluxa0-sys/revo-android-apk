@@ -311,10 +311,12 @@ once(
         final int leftEdges = hudRadialContrastCount(frame, leftCx, cy, scale);
         final int rightEdges = hudRadialContrastCount(frame, rightCx, cy, scale);
 
-        // Measured on the real BlueStacks load sequence at 960x540:
-        // joining/loading maxed at 14/16 strong samples. Current live gameplay
-        // measured 43/16; keep the left control as the strong discriminator.
-        return leftEdges >= 28 && rightEdges >= 12;
+        // Measured on real 960x540 BlueStacks frames:
+        // joining/loading maxed at left/right=14/16; static-joystick gameplay
+        // measured 43/16; Dynamic Thumbstick gameplay can hide the idle left
+        // control entirely and measured 0/31. Keep the old strong-left path,
+        // but also accept the clearly stronger live jump button by itself.
+        return (leftEdges >= 28 && rightEdges >= 12) || rightEdges >= 24;
     }
 
     private int hudRadialContrastCount(Bitmap frame, int cx, int cy, float scale) {
