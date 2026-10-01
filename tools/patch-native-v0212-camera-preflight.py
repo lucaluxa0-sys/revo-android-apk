@@ -235,6 +235,15 @@ once(
 
             case SEEK_CLASSIC:
                 if (now < cameraPreflightNextAtMs) return false;
+                // Do not classify or tap until the Camera Mode row itself is visible.
+                // Current Roblox can return a stale pause/gameplay screenshot for a
+                // short window after the Settings tab tap; blindly cycling here can
+                // overshoot Classic even though the tap coordinates are correct.
+                if (!isCameraSettingsRowVisible(frame)) {
+                    cameraPreflightNextAtMs = now + 250;
+                    status = "Camera preflight: waiting for Camera Mode row";
+                    return false;
+                }
                 if (isCameraClassic(frame)) {
                     // Toggle the Roblox menu closed.
                     svc.tap(displayId, w * 0.0604167f, h * 0.0962963f, 35);
@@ -348,6 +357,40 @@ once(
         boolean resumeBlue = rb >= 85 && rb >= rr + 30 && rb >= rg + 20;
 
         return mean < 80 && resumeBlue;
+    }
+
+    private boolean isCameraSettingsRowVisible(Bitmap frame) {
+        // Fixed normalized sample grids around the left/right Camera Mode chevrons.
+        // Live 960x540 evidence on the current Roblox UI:
+        // Settings Follow/Default/Classic = left 29/256, right 39/256;
+        // gameplay = left 47/256, right 0/256; pause People = 0/256, 0/256.
+        // Requiring both chevrons prevents stale gameplay/pause frames from
+        // advancing SEEK_CLASSIC while remaining resolution-independent.
+        int leftBright = normalizedBrightGridCount(frame, 0.405f, 0.445f, 0.385f, 0.475f);
+        int rightBright = normalizedBrightGridCount(frame, 0.885f, 0.925f, 0.385f, 0.475f);
+        return leftBright >= 18 && rightBright >= 24;
+    }
+
+    private int normalizedBrightGridCount(Bitmap frame, float x0, float x1, float y0, float y1) {
+        final int fw = frame.getWidth();
+        final int fh = frame.getHeight();
+        int bright = 0;
+        final int cols = 16;
+        final int rows = 16;
+        for (int gy = 0; gy < rows; gy++) {
+            float ny = y0 + (y1 - y0) * ((gy + 0.5f) / rows);
+            int y = Math.max(0, Math.min(fh - 1, Math.round(fh * ny)));
+            for (int gx = 0; gx < cols; gx++) {
+                float nx = x0 + (x1 - x0) * ((gx + 0.5f) / cols);
+                int x = Math.max(0, Math.min(fw - 1, Math.round(fw * nx)));
+                int pixel = frame.getPixel(x, y);
+                int r = (pixel >> 16) & 0xff;
+                int g = (pixel >> 8) & 0xff;
+                int b = pixel & 0xff;
+                if (Math.min(r, Math.min(g, b)) >= 180) bright++;
+            }
+        }
+        return bright;
     }
 
     private boolean isCameraClassic(Bitmap frame) {
@@ -466,4 +509,6 @@ assert "isRobloxTouchWindowReady()" in verify_service
 assert "waiting for touch-ready Roblox window" in verify_macro
 assert "isRobloxGameplayReady(frame)" in verify_macro
 assert "waiting for Bee Swarm gameplay HUD" in verify_macro
-print("PASS: installed Roblox gameplay-ready gate + Camera Mode=Classic startup preflight")
+assert "isCameraSettingsRowVisible(frame)" in verify_macro
+assert "waiting for Camera Mode row" in verify_macro
+print("PASS: installed Roblox gameplay-ready gate + Camera Mode-row visual gate + Classic startup preflight")
