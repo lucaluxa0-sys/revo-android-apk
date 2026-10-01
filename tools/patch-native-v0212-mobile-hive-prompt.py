@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from pathlib import Path
 
 p=Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
@@ -207,12 +207,12 @@ once(
 
 once(
     '''move(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, "desktop MoveToNextHive: leave current prompt")''',
-    '''moveMobileProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: leave current prompt")''',
+    '''moveMobileSweepProbe85(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: leave current prompt")''',
     "mobile leave-hive probe timing")
 
 once(
     '''move(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, "desktop MoveToNextHive: seek next prompt")''',
-    '''moveMobileProbe(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: seek next prompt")''',
+    '''moveMobileSweepProbe85(frame, svc, c, sweepDirection(), SWEEP_CHUNK_STUDS, 170, "desktop MoveToNextHive: seek next prompt")''',
     "mobile next-hive probe timing")
 
 once(
@@ -222,7 +222,41 @@ once(
 
 move_marker='''    private boolean move(Bitmap frame, RevoAccessibilityService svc, Config c, Direction d, double studs, String label) {
 '''
-move_helper='''    // Tiny proximity-search motions need a longer touch hold on Android than
+move_helper='''    // Lateral hive-to-hive traversal needs enough joystick pressure to climb the
+    // raised hive-pad lip. Partial 0.735 pressure repeatedly timed out at hive2,
+    // while full 1.0 pressure was previously tried and reverted. Clamp only these
+    // sweep probes to the untried middle ground 0.85; keep their 3-stud/170ms cadence.
+    private boolean moveMobileSweepProbe85(Bitmap frame, RevoAccessibilityService svc, Config c,
+                                           Direction d, double studs, long minimumDurationMs, String label) {
+        long now = SystemClock.elapsedRealtime();
+        long nominalDuration = RevoMovementSpeed.durationMs(
+                studs, c.baseMoveSpeed, c.msPerStud,
+                c.hasteStacks, c.hastePlus, c.coconutHaste, c.bearMorph, c.oil, c.superSmoothie,
+                MAX_GESTURE_MS);
+        long duration = Math.max(minimumDurationMs, nominalDuration);
+        float proportional = duration > 0L
+                ? Math.max(0.05f, Math.min(1.0f, (float)nominalDuration / (float)duration))
+                : 1.0f;
+        float deflectionScale = Math.max(0.85f, proportional);
+        float w = frame.getWidth(), h = frame.getHeight();
+        float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY), r = (float)(Math.min(w, h) * c.joyR);
+        float probeR = r * deflectionScale;
+        float tx = cx, ty = cy;
+        switch (d) {
+            case FORWARD: ty -= probeR; break;
+            case BACKWARD: ty += probeR; break;
+            case LEFT: tx -= probeR; break;
+            case RIGHT: tx += probeR; break;
+        }
+        boolean accepted = svc.joystick(displayId, cx, cy, tx, ty, duration);
+        recordGesture(accepted, label + String.format(Locale.US,
+                " %.2f studs %dms nominal=%dms deflection=%.3f sweepClamp=0.85",
+                studs, duration, nominalDuration, deflectionScale));
+        nextActionAtMs = now + duration + 80;
+        return accepted;
+    }
+
+    // Tiny proximity-search motions need a longer touch hold on Android than
     // the desktop distance/speed formula produces. Keep long route geometry on
     // desktop timing; apply only a minimum to explicit mobile probe calls.
     private boolean moveMobileProbe(Bitmap frame, RevoAccessibilityService svc, Config c,
@@ -262,4 +296,3 @@ move_helper='''    // Tiny proximity-search motions need a longer touch hold on 
 once(move_marker,move_helper,"mobile probe timing helper")
 p.write_text(s)
 print("PASS: Android mobile hive Tap/Claim detector installed")
-
