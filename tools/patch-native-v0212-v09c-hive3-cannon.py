@@ -102,20 +102,17 @@ cases = r'''            case V09C_H3_BACK_2:
                 // not used on this account.
                 double v09cAlignStuds = claimedHive == 4 ? 118.0 : 80.0;
                 int v09cEdge = claimedHive == 4 ? 205 : 203;
-                Direction v09cHorizontal = claimedHive == 4 ? Direction.LEFT : Direction.RIGHT;
-                String v09cHorizontalName = claimedHive == 4 ? "Left" : "Right";
-                if (move(frame, svc, c, v09cHorizontal, v09cAlignStuds,
-                        "v0.9c edge" + v09cEdge + " Medium alignment: " + v09cHorizontalName
+                if (move(frame, svc, c, Direction.RIGHT, v09cAlignStuds,
+                        "v0.9c edge" + v09cEdge + " Medium alignment: Right"
                                 + v09cAlignStuds + " (parachute disabled)")) {
                     transitionAfterGesture(State.V09C_H3_JUMP_CANNON_RIGHT_20);
                 }
                 break;
             }
             case V09C_H3_JUMP_CANNON_RIGHT_20:
-                // jump_cannon.lua: KeyDown(Right); SleepStuds(20). Hive4 live QA
-                // showed the desktop horizontal axis is mirrored on this mobile spawn.
-                if (move(frame, svc, c, claimedHive == 4 ? Direction.LEFT : Direction.RIGHT, 20.0,
-                        "v0.9c jump_cannon: " + (claimedHive == 4 ? "Left" : "Right") + " 20")) {
+                // jump_cannon.lua: KeyDown(Right); SleepStuds(20)
+                if (move(frame, svc, c, Direction.RIGHT, 20.0,
+                        "v0.9c jump_cannon: Right 20")) {
                     transitionAfterGesture(State.V09C_H3_JUMP_CANNON_RIGHT_8);
                 }
                 break;
@@ -129,15 +126,12 @@ cases = r'''            case V09C_H3_BACK_2:
                 float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY);
                 float r = (float)(Math.min(w, h) * c.joyR);
                 float jumpX = (float)(w * c.jumpX), jumpY = (float)(h * c.jumpY);
-                float horizontalX = claimedHive == 4 ? cx - r : cx + r;
                 boolean accepted = svc.joystickWithTimedTaps(
-                        displayId, cx, cy, horizontalX, cy,
+                        displayId, cx, cy, cx + r, cy,
                         Math.max(180L, duration),
                         jumpX, jumpY, 100, new long[]{0L});
                 recordGesture(accepted,
-                        "v0.9c jump_cannon: Space100 + "
-                                + (claimedHive == 4 ? "Left8" : "Right8")
-                                + " duration=" + duration + "ms");
+                        "v0.9c jump_cannon: Space100 + Right8 duration=" + duration + "ms");
                 nextActionAtMs = now + Math.max(180L, duration) + 80L;
                 if (accepted) transitionKeepDeadline(State.V09C_H3_JUMP_CANNON_DIAG_6);
                 break;
@@ -146,10 +140,8 @@ cases = r'''            case V09C_H3_BACK_2:
                 // jump_cannon.lua adds Forward for 6 studs while Right remains held.
                 // Android cannot mutate one continuous joystick stroke in-place, so
                 // preserve the geometry with a single Forward+Right diagonal segment.
-                if (moveDiagonal(frame, svc, c, Direction.FORWARD,
-                        claimedHive == 4 ? Direction.LEFT : Direction.RIGHT, 6.0,
-                        "v0.9c jump_cannon: Forward+"
-                                + (claimedHive == 4 ? "Left" : "Right") + " 6")) {
+                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.RIGHT, 6.0,
+                        "v0.9c jump_cannon: Forward+Right 6")) {
                     v09cCannonProbeStuds = 0.0;
                     transitionAfterGesture(State.V09C_H3_CANNON_PROBE);
                 }
@@ -167,10 +159,8 @@ cases = r'''            case V09C_H3_BACK_2:
                     break;
                 }
                 if (v09cCannonProbeStuds < 8.0) {
-                    Direction probeDirection = claimedHive == 4 ? Direction.LEFT : Direction.RIGHT;
-                    if (moveMobileProbe(frame, svc, c, probeDirection, 1.0, 170,
-                            "v0.9c jump_cannon: bounded "
-                                    + (claimedHive == 4 ? "Left" : "Right") + " detector probe")) {
+                    if (moveMobileProbe(frame, svc, c, Direction.RIGHT, 1.0, 170,
+                            "v0.9c jump_cannon: bounded Right detector probe")) {
                         v09cCannonProbeStuds += 1.0;
                     }
                     break;
@@ -193,7 +183,6 @@ once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
 """            r.put("v09cHive3CannonRoute", "v09c-hive34-cannon-medium-no-parachute-v3");
-            r.put("v09cHive4HorizontalMap", "desktop-right-to-mobile-left-v1");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
