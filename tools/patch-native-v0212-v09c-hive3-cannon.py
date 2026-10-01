@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive234-sunflower-no-parachute-v4"
+MARKER = "v09c-hive234-sunflower-no-parachute-v5-edge202-backward"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -73,11 +73,11 @@ claimed_new = """                // This account has no parachute and the generi
                 if (isSunflower(c.field) && claimedHive == 2) {
                     Log.i(TAG, "routeMarker=""" + MARKER + """ edges=202,406,468 cannon=disabled parachute=disabled");
                     // edge202 Medium: WalkAsync(Left,50) concurrently with Walk(Backward,75).
-                    // The claimed-hive Android camera reverses desktop Forward/Backward
-                    // (already proven by the hive3/4 route), so desktop Backward becomes
-                    // mobile Forward here while the horizontal Left component is preserved.
-                    if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.LEFT, 50.0,
-                            "v0.9c edge202 Medium: desktop Backward+Left50 -> mobile Forward+Left50")) {
+                    // Live WGC from hive2 showed the prior mobile Forward mapping drove directly
+                    // into the hive honeycomb wall. Preserve desktop Backward for hive2
+                    // while keeping the decoded horizontal Left component unchanged.
+                    if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.LEFT, 50.0,
+                            "v0.9c edge202 Medium: desktop Backward+Left50 -> mobile Backward+Left50")) {
                         transitionAfterGesture(State.V09C_H2_SPAWN_FORWARD_25);
                     }
                     break;
@@ -116,10 +116,9 @@ once(claimed_anchor, claimed_new, "CLAIMED branch")
 
 cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 // Finish edge202 Medium Backward75 after the concurrent first 50 studs.
-                // Claimed-hive mobile Forward/Backward is reversed, so desktop Backward25
-                // maps to mobile Forward25.
-                if (move(frame, svc, c, Direction.FORWARD, 25.0,
-                        "v0.9c edge202 Medium: desktop Backward remainder25 -> mobile Forward25")) {
+                // Keep the same hive2 vertical mapping verified by the first edge202 leg.
+                if (move(frame, svc, c, Direction.BACKWARD, 25.0,
+                        "v0.9c edge202 Medium: desktop Backward remainder25 -> mobile Backward25")) {
                     transitionAfterGesture(State.V09C_H2_TICKET_YAW_4);
                 }
                 break;
@@ -271,7 +270,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v4"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v5-edge202-backward"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -288,7 +287,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v4");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v5-edge202-backward");
             r.put("v09cHive2DirectRoute", "edges202-406-468:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
