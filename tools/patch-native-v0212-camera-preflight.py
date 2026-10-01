@@ -240,6 +240,26 @@ once(
                 // short window after the Settings tab tap; blindly cycling here can
                 // overshoot Classic even though the tap coordinates are correct.
                 if (!isCameraSettingsRowVisible(frame)) {
+                    // If the pause menu is definitely still on People, the prior
+                    // Settings-tab gesture was queued but never took effect. Retry
+                    // only that tab tap; never touch the Camera Mode arrow until the
+                    // chevrons prove the Settings row is actually on screen.
+                    if (isRobloxPauseMenuOpen(frame) && svc.isRobloxTouchWindowReady()) {
+                        if (cameraPreflightMenuRetries >= 4) {
+                            cameraPreflightState = CameraPreflightState.FAILED;
+                            lastError = "Camera preflight could not open Settings camera row";
+                            status = "Camera preflight failed";
+                            running.set(false);
+                            return false;
+                        }
+                        boolean retrySettingsAccepted = svc.tap(
+                                displayId, w * 0.3229167f, h * 0.2444444f, 35);
+                        if (retrySettingsAccepted) cameraPreflightMenuRetries++;
+                        cameraPreflightNextAtMs = now + 500;
+                        status = "Camera preflight: retrying Settings tab "
+                                + cameraPreflightMenuRetries;
+                        return false;
+                    }
                     cameraPreflightNextAtMs = now + 250;
                     status = "Camera preflight: waiting for Camera Mode row";
                     return false;
@@ -511,4 +531,6 @@ assert "isRobloxGameplayReady(frame)" in verify_macro
 assert "waiting for Bee Swarm gameplay HUD" in verify_macro
 assert "isCameraSettingsRowVisible(frame)" in verify_macro
 assert "waiting for Camera Mode row" in verify_macro
-print("PASS: installed Roblox gameplay-ready gate + Camera Mode-row visual gate + Classic startup preflight")
+assert "retrying Settings tab" in verify_macro
+assert "could not open Settings camera row" in verify_macro
+print("PASS: installed Roblox gameplay-ready gate + Camera Mode-row visual gate/retry + Classic startup preflight")
