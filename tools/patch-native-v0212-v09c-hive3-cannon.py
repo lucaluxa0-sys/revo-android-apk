@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive234-sunflower-no-parachute-v5-edge202-backward"
+MARKER = "v09c-hive234-sunflower-no-parachute-v6-edge468-right71"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -160,9 +160,11 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 }
                 break;
             case V09C_H2_SUNFLOWER_LEFT_71:
-                // Walk({[0]=Left,[71]={Backward,Left},[142]=End})
-                if (moveField(frame, svc, c, Direction.LEFT, 71.0,
-                        "v0.9c edge468: Left71")) {
+                // Walk({[0]=Left,[71]={Backward,Left},[142]=End}). Live WGC from
+                // the ticket node showed mobile Left71 drives directly into the
+                // yellow wall, so test only this first horizontal leg as Right71.
+                if (moveField(frame, svc, c, Direction.RIGHT, 71.0,
+                        "v0.9c edge468: desktop Left71 -> mobile Right71")) {
                     transitionAfterGesture(State.V09C_H2_SUNFLOWER_DIAG_71);
                 }
                 break;
@@ -270,7 +272,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v5-edge202-backward"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v6-edge468-right71"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -287,7 +289,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v5-edge202-backward");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v6-edge468-right71");
             r.put("v09cHive2DirectRoute", "edges202-406-468:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
