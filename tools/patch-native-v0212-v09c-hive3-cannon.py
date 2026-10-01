@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive234-sunflower-no-parachute-v6-edge468-right71"
+MARKER = "v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -161,16 +161,16 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 break;
             case V09C_H2_SUNFLOWER_LEFT_71:
                 // Walk({[0]=Left,[71]={Backward,Left},[142]=End}). Live WGC from
-                // the ticket node showed mobile Left71 drives directly into the
-                // yellow wall, so test only this first horizontal leg as Right71.
+                // the ticket node proved the mobile horizontal axis is mirrored for
+                // this edge, so map each desktop Left component to mobile Right.
                 if (moveField(frame, svc, c, Direction.RIGHT, 71.0,
                         "v0.9c edge468: desktop Left71 -> mobile Right71")) {
                     transitionAfterGesture(State.V09C_H2_SUNFLOWER_DIAG_71);
                 }
                 break;
             case V09C_H2_SUNFLOWER_DIAG_71:
-                if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.LEFT, 71.0,
-                        "v0.9c edge468: Backward+Left71")) {
+                if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.RIGHT, 71.0,
+                        "v0.9c edge468: desktop Backward+Left71 -> mobile Backward+Right71")) {
                     transitionAfterGesture(State.V09C_H2_SUNFLOWER_ALIGN_LEFT_30);
                 }
                 break;
@@ -178,8 +178,8 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 // Walk({[0]={Left,Align},[30]={Backward,Align},[60]=End}).
                 // Existing Android routes port WalkAlign as directional motion with
                 // route timing, so preserve that same convention here.
-                if (moveField(frame, svc, c, Direction.LEFT, 30.0,
-                        "v0.9c edge468: WalkAlign Left30")) {
+                if (moveField(frame, svc, c, Direction.RIGHT, 30.0,
+                        "v0.9c edge468: desktop WalkAlign Left30 -> mobile Right30")) {
                     transitionAfterGesture(State.V09C_H2_SUNFLOWER_ALIGN_BACKWARD_30);
                 }
                 break;
@@ -272,7 +272,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v6-edge468-right71"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -289,7 +289,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v6-edge468-right71");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v7-edge468-right-axis");
             r.put("v09cHive2DirectRoute", "edges202-406-468:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
