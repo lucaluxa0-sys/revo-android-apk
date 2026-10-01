@@ -460,23 +460,30 @@ helpers = r'''    private boolean isPineTree(String field) {
             new int[]{109, 118, 120, 120, 123, 126, 127};
 
     private boolean isMobileBlackBearPrompt(Bitmap frame) {
-        if (!isMobileTapPrompt(frame)) return false;
+        int promptTop = findMobileTapPromptTop(frame);
+        if (promptTop < 0) return false;
 
         int fw = frame.getWidth(), fh = frame.getHeight();
         float sx = fw / 960.0f, sy = fh / 540.0f;
-        int radius = Math.max(1, Math.round(Math.min(sx, sy) * 2.0f));
+        // The old text signature was measured when the banner top was ~92 px at
+        // 960x540. Track the live banner top, then search a slightly wider local
+        // neighborhood because current Roblox text rasterization also shifted.
+        int basePromptTop = Math.round(92.0f * sy);
+        int shiftY = promptTop - basePromptTop;
+        int radius = Math.max(1, Math.round(Math.min(sx, sy) * 4.0f));
         int matched = 0;
 
         for (int i = 0; i < MOBILE_BLACK_BEAR_TEXT_X.length; i++) {
             int cx = Math.max(0, Math.min(fw - 1, Math.round(MOBILE_BLACK_BEAR_TEXT_X[i] * sx)));
-            int cy = Math.max(0, Math.min(fh - 1, Math.round(MOBILE_BLACK_BEAR_TEXT_Y[i] * sy)));
+            int cy = Math.max(0, Math.min(fh - 1,
+                    Math.round(MOBILE_BLACK_BEAR_TEXT_Y[i] * sy) + shiftY));
             boolean found = false;
             for (int yy = Math.max(0, cy - radius); yy <= Math.min(fh - 1, cy + radius) && !found; yy++) {
                 for (int xx = Math.max(0, cx - radius); xx <= Math.min(fw - 1, cx + radius); xx++) {
                     int p = frame.getPixel(xx, yy);
                     int r=(p>>16)&255, g=(p>>8)&255, b=p&255;
                     int hi=Math.max(r,Math.max(g,b)), lo=Math.min(r,Math.min(g,b));
-                    if (lo >= 205 && hi - lo <= 38) {
+                    if (lo >= 195 && hi - lo <= 45) {
                         found = true;
                         break;
                     }
@@ -485,8 +492,8 @@ helpers = r'''    private boolean isPineTree(String field) {
             if (found) matched++;
         }
 
-        // Saved 960x540 QA: real "Talk to Black Bear" = 7/7.
-        // Claim Hive, Make Honey, occupied-hive and live Send Trade Request = 0/7.
+        // Current 960x540 WGC: Talk to Black Bear=6/7; occupied Send Trade=4/7.
+        // Keep the original >=5 discriminator while dynamically aligning Y.
         return matched >= 5;
     }
 

@@ -36,20 +36,44 @@ helper='''    // Android-native hive interaction detection. Roblox mobile render
         return b >= 170 && g >= 80 && b-r >= 70 && b-g >= 35;
     }
 
+    // Roblox mobile moves the top-center proximity banner vertically between
+    // UI states. Locate its light Tap panel beside the blue action panel by
+    // sparse area coverage rather than four fixed pixels. Real 960x540 QA:
+    // Black Bear ~=0.81, occupied hive ~=0.81, no-prompt <=0.03.
+    private int findMobileTapPromptTop(Bitmap frame) {
+        int fw=frame.getWidth(), fh=frame.getHeight();
+        float sx=fw/960.0f, sy=fh/540.0f;
+        float bestScore=0.0f;
+        int bestTop=-1;
+        for(int refTop=20; refTop<=160; refTop+=2) {
+            int neutral=0, neutralTotal=0, blue=0, blueTotal=0;
+            for(int refY=refTop+4; refY<refTop+44; refY+=4) {
+                int y=Math.max(0,Math.min(fh-1,Math.round(refY*sy)));
+                for(int refX=335; refX<=385; refX+=4) {
+                    int x=Math.max(0,Math.min(fw-1,Math.round(refX*sx)));
+                    neutralTotal++;
+                    if(isLightNeutral(frame.getPixel(x,y))) neutral++;
+                }
+                for(int refX=405; refX<=660; refX+=4) {
+                    int x=Math.max(0,Math.min(fw-1,Math.round(refX*sx)));
+                    blueTotal++;
+                    if(isPromptBlue(frame.getPixel(x,y))) blue++;
+                }
+            }
+            if(neutralTotal==0 || blueTotal==0) continue;
+            float neutralFrac=(float)neutral/(float)neutralTotal;
+            float blueFrac=(float)blue/(float)blueTotal;
+            float score=Math.min(neutralFrac,blueFrac);
+            if(score>bestScore) {
+                bestScore=score;
+                bestTop=Math.round(refTop*sy);
+            }
+        }
+        return bestScore>=0.55f ? bestTop : -1;
+    }
+
     private boolean isMobileTapPrompt(Bitmap frame) {
-        int w=frame.getWidth(), h=frame.getHeight();
-        int gx1=Math.max(0,Math.min(w-1,Math.round(w*0.3333333f)));
-        int gy1=Math.max(0,Math.min(h-1,Math.round(h*0.1851852f)));
-        int gx2=Math.max(0,Math.min(w-1,Math.round(w*0.3854167f)));
-        int gy2=Math.max(0,Math.min(h-1,Math.round(h*0.2592593f)));
-        int bx1=Math.max(0,Math.min(w-1,Math.round(w*0.4114583f)));
-        int by1=gy1;
-        int bx2=Math.max(0,Math.min(w-1,Math.round(w*0.65625f)));
-        int by2=gy2;
-        return isLightNeutral(frame.getPixel(gx1,gy1))
-                && isLightNeutral(frame.getPixel(gx2,gy2))
-                && isPromptBlue(frame.getPixel(bx1,by1))
-                && isPromptBlue(frame.getPixel(bx2,by2));
+        return findMobileTapPromptTop(frame)>=0;
     }
 
     private boolean isMobileClaimHive(Bitmap frame) {
