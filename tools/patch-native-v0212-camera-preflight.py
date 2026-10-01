@@ -280,7 +280,7 @@ once(
                     return false;
                 }
                 // Camera Mode right-arrow. Cycle until explicit "Classic" is visible.
-                svc.tap(displayId, w * 0.9083333f, h * 0.5703704f, 35);
+                svc.tap(displayId, w * 0.9083333f, h * 0.4314815f, 35);
                 cameraPreflightTaps++;
                 cameraPreflightNextAtMs = now + 450;
                 status = "Camera preflight: cycling mode " + cameraPreflightTaps;
@@ -420,7 +420,7 @@ once(
         final int fh = frame.getHeight();
 
         final int left = Math.round(fw * 0.609375f);
-        final int top = Math.round(fh * 0.5351852f);
+        final int top = Math.round(fh * 0.3962963f);
         final int cropW = Math.max(1, Math.round(fw * 0.125f));
         final int cropH = Math.max(1, Math.round(fh * 0.0703704f));
 
