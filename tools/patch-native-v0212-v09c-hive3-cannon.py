@@ -4,14 +4,14 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-edge203-hive3-cannon-medium-no-parachute-v2"
+MARKER = "v09c-hive34-cannon-medium-no-parachute-v3"
 if MARKER in s:
-    raise SystemExit("v0.9c hive3 cannon patch already applied")
+    raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
 def once(old, new, label):
     global s
     if old not in s:
-        raise SystemExit("v09c hive3 cannon anchor missing: " + label)
+        raise SystemExit("v09c hive3/hive4 cannon anchor missing: " + label)
     s = s.replace(old, new, 1)
 
 once(
@@ -55,16 +55,19 @@ claimed_anchor = """                // Mobile spawns facing the hive wall. Back 
                 }
                 break;
 """
-claimed_new = """                // Narrow source-grounded v0.9c-hotfix3 route edge 203:
-                // hive3 -> cannon. The desktop edge begins Forward20, Back2.
+claimed_new = """                // Narrow source-grounded v0.9c-hotfix3 routes:
+                // edge203 hive3 -> cannon and edge205 hive4 -> cannon.
+                // Both desktop edges begin Forward20, Back2.
                 // Live Android QA established that the claimed-hive mobile camera
                 // faces the opposite forward axis here (desktop Forward12 wedged
                 // into the hive wall), so preserve the edge's world displacement
                 // by mapping only this initial Forward/Backward pair accordingly.
-                if (isSunflower(c.field) && claimedHive == 3) {
-                    Log.i(TAG, "routeMarker=""" + MARKER + """ edge=203 alignment=medium parachute=disabled");
+                if (isSunflower(c.field) && (claimedHive == 3 || claimedHive == 4)) {
+                    int v09cEdge = claimedHive == 4 ? 205 : 203;
+                    Log.i(TAG, "routeMarker=""" + MARKER + """ edge=" + v09cEdge
+                            + " alignment=medium parachute=disabled");
                     if (move(frame, svc, c, Direction.BACKWARD, 20.0,
-                            "v0.9c edge203 Forward20 -> mobile Backward20")) {
+                            "v0.9c hive3/4 Forward20 -> mobile Backward20")) {
                         v09cCannonProbeStuds = 0.0;
                         transitionAfterGesture(State.V09C_H3_BACK_2);
                     }
@@ -91,15 +94,21 @@ cases = r'''            case V09C_H3_BACK_2:
                     transitionAfterGesture(State.V09C_H3_ALIGN_RIGHT_80);
                 }
                 break;
-            case V09C_H3_ALIGN_RIGHT_80:
+            case V09C_H3_ALIGN_RIGHT_80: {
                 // This account has no parachute. Use Revolution v0.9c's original
-                // non-parachute ExecuteWithAlignment Medium branch instead of the
-                // Low branch Parachute(Right) + Walk Right4.
-                if (move(frame, svc, c, Direction.RIGHT, 80.0,
-                        "v0.9c edge203 Medium alignment: Right80 (parachute disabled)")) {
+                // non-parachute ExecuteWithAlignment Medium branch. Decoded AST:
+                // edge203 hive3 = 38*2+4 = Right80; edge205 hive4 = 38*3+4 = Right118.
+                // Their Low branches require Parachute(Right), so they are intentionally
+                // not used on this account.
+                double v09cAlignStuds = claimedHive == 4 ? 118.0 : 80.0;
+                int v09cEdge = claimedHive == 4 ? 205 : 203;
+                if (move(frame, svc, c, Direction.RIGHT, v09cAlignStuds,
+                        "v0.9c edge" + v09cEdge + " Medium alignment: Right"
+                                + v09cAlignStuds + " (parachute disabled)")) {
                     transitionAfterGesture(State.V09C_H3_JUMP_CANNON_RIGHT_20);
                 }
                 break;
+            }
             case V09C_H3_JUMP_CANNON_RIGHT_20:
                 // jump_cannon.lua: KeyDown(Right); SleepStuds(20)
                 if (move(frame, svc, c, Direction.RIGHT, 20.0,
@@ -146,7 +155,7 @@ cases = r'''            case V09C_H3_BACK_2:
                 if (p != null) {
                     lastMatch = p;
                     transition(State.READY_AT_CANNON,
-                            "v0.9c edge203 cannon interaction detected");
+                            "v0.9c hive3/4 cannon interaction detected");
                     break;
                 }
                 if (v09cCannonProbeStuds < 8.0) {
@@ -156,10 +165,10 @@ cases = r'''            case V09C_H3_BACK_2:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-edge203-hive3-cannon-medium-no-parachute-v2"
+                Log.i(TAG, "routeMarker=v09c-hive34-cannon-medium-no-parachute-v3"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
-                        "v0.9c edge203 bounded cannon endpoint; Press E unavailable");
+                        "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
                 break;
             }
 '''
@@ -173,7 +182,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-edge203-hive3-cannon-medium-no-parachute-v2");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive34-cannon-medium-no-parachute-v3");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
