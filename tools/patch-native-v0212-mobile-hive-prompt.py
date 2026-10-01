@@ -76,12 +76,9 @@ helper='''    // Android-native hive interaction detection. Roblox mobile render
         return findMobileTapPromptTop(frame)>=0;
     }
 
-    private boolean isMobileClaimHive(Bitmap frame, int promptTop) {
+    private boolean isMobileClaimHive(Bitmap frame) {
         int fw=frame.getWidth(), fh=frame.getHeight();
-        int left=Math.round(fw*0.4114583f);
-        // findMobileTapPromptTop() returns the scan-band top; the original
-        // Claim-Hive signature crop begins 4 reference pixels above it.
-        int top=Math.max(0,promptTop-Math.max(1,Math.round(fh*(4.0f/540.0f))));
+        int left=Math.round(fw*0.4114583f), top=Math.round(fh*0.1703704f);
         int cw=Math.max(1,Math.round(fw*0.265625f));
         int ch=Math.max(1,Math.round(fh*0.1037037f));
         int matched=0;
@@ -150,10 +147,8 @@ helper='''    // Android-native hive interaction detection. Roblox mobile render
             return new Match("mobileoccupied",x,y,w,h);
         }
 
-        int tapTop=findMobileTapPromptTop(frame);
-        if(tapTop<0) return null;
-        y=Math.max(0,tapTop-Math.max(1,Math.round(fh*(4.0f/540.0f))));
-        if(isMobileClaimHive(frame,tapTop) && asksForClaim(names)) {
+        if(!isMobileTapPrompt(frame)) return null;
+        if(isMobileClaimHive(frame) && asksForClaim(names)) {
             return new Match("claimhive",x,y,w,h);
         }
         if(asksForOccupiedHive(names)) return new Match("mobileoccupied",x,y,w,h);
@@ -324,7 +319,4 @@ move_helper='''    // Lateral hive-to-hive traversal needs enough joystick press
 ''' + move_marker
 once(move_marker,move_helper,"mobile probe timing helper")
 p.write_text(s)
-assert "isMobileClaimHive(Bitmap frame, int promptTop)" in s
-assert "int tapTop=findMobileTapPromptTop(frame);" in s
-assert "promptTop-Math.max(1,Math.round(fh*(4.0f/540.0f)))" in s
-print("PASS: Android mobile hive Tap/Claim detector installed with dynamic vertical Claim alignment")
+print("PASS: Android mobile hive Tap/Claim detector installed")
