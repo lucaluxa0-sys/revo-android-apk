@@ -24,6 +24,7 @@ on:
       - 'tools/patch-native-v0212-joystick-hold.py'
       - 'tools/patch-native-v0212-joystick-callback-thread.py'
       - 'tools/patch-native-v0212-jump-after-acquire.py'
+      - 'tools/patch-native-v0212-v09c-hive3-cannon.py'
       - 'tools/patch-native-v0212-joystick-prequeue-continuation.py'
       - 'tools/patch-native-v0212-movement-speed.py'
       - 'tools/patch-native-v0212-sunflower-gather-footprint.py'
@@ -96,6 +97,7 @@ jobs:
           python3 tools/patch-native-v0212-background-webview-release.py
           python3 tools/patch-native-v0212-capture-throttle.py
           python3 tools/patch-native-v0212-jump-after-acquire.py
+          python3 tools/patch-native-v0212-v09c-hive3-cannon.py
           python3 tools/patch-native-v0212-sunflower-gather-footprint.py
           python3 -m py_compile \
             tools/patch-native-v0211-bee-swarm-launch.py \
@@ -116,6 +118,7 @@ jobs:
             tools/patch-native-v0212-joystick-hold.py \
             tools/patch-native-v0212-joystick-callback-thread.py \
             tools/patch-native-v0212-jump-after-acquire.py \
+            tools/patch-native-v0212-v09c-hive3-cannon.py \
             tools/patch-native-v0212-joystick-prequeue-continuation.py \
             tools/patch-native-v0212-movement-speed.py \
             tools/patch-native-v0212-sunflower-gather-footprint.py
@@ -129,6 +132,7 @@ jobs:
           grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'continuationQueue=prequeued-before-acquire-completion-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
+          grep -q 'v09c-edge203-hive3-cannon-low-v1' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'Exact command geometry from desktop patterns/gather/e_lol.lua.' revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
           grep -q 'getWindows()' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'isRobloxTouchWindowReady' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
