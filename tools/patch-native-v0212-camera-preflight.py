@@ -517,8 +517,16 @@ r'''    public boolean isRobloxForeground() {
                     continue;
                 }
                 AccessibilityNodeInfo root = window.getRoot();
-                if (root == null || root.getPackageName() == null) continue;
-                if (isRobloxPackageName(String.valueOf(root.getPackageName()))) return true;
+                if (root != null && root.getPackageName() != null
+                        && isRobloxPackageName(String.valueOf(root.getPackageName()))) {
+                    return true;
+                }
+                // Current Roblox/BlueStacks can expose the active/focused app
+                // window with a null Accessibility root. The window title still
+                // comes from Android's live foreground window metadata. Accept
+                // only the exact active/focused application title "Roblox".
+                CharSequence title = window.getTitle();
+                if (title != null && "Roblox".contentEquals(title)) return true;
             }
         } catch (Throwable ignored) {}
         return false;
