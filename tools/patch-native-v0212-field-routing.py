@@ -353,7 +353,15 @@ new_ready = r'''            case READY_AT_CANNON:
                 break;
             }
             case BLACK_BEAR_CHECKPOINT_FAILED:
-                return fail("desktop cannon.black-bear checkpoint interaction failed after 3 attempts");
+                // The newer v10 hive3/4 cannon route bypasses the old generic
+                // cannon-seek state that previously invoked the calibrated mobile
+                // Black Bear wall recovery. Preserve the normal three checkpoint
+                // nudges first; if they still miss the prompt, reuse that already-
+                // proven local recovery instead of terminating the macro here.
+                blackBearCheckpointAttempts = 0;
+                transition(State.MOBILE_BLACK_BEAR_RECOVER_YAW,
+                        "desktop Black Bear checkpoint missed; mobile wall recovery");
+                break;
             case MOBILE_BLACK_BEAR_RECOVER_YAW:
                 if (beginSunflowerFromMobileBlackBear(frame, svc,
                         "mobile Black Bear recovery: prompt before yaw")) break;
