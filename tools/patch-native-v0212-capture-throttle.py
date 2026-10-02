@@ -3,7 +3,7 @@ from pathlib import Path
 ENGINE = Path("revo-android/app/src/main/java/com/revolution/android/MacroEngine.java")
 
 old = "private static final long FRAME_INTERVAL_MS = 50; // target <=20 capture requests/sec"
-new = "private static final long FRAME_INTERVAL_MS = 350; // AccessibilityService.takeScreenshot requires >333 ms between requests"
+new = "private static final long FRAME_INTERVAL_MS = 500; // BlueStacks margin above AccessibilityService screenshot minimum"
 
 if not ENGINE.is_file():
     raise SystemExit(f"MacroEngine.java missing: {ENGINE}")
