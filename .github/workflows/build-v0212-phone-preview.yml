@@ -130,7 +130,7 @@ jobs:
           grep -q 'FIELD_ROUTE_READY route=cannon->pinetree-br->pinetree-center' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'c0a499ba9512b4282bc3f59bdf9daacedd6841b1d7a2008f90075e3d0c07859f' revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java
           grep -q 'CAPTURE_CALLBACK_TIMEOUT_MS' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
-          grep -q 'FRAME_INTERVAL_MS = 350' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
+          grep -q 'FRAME_INTERVAL_MS = 500' revo-android/app/src/main/java/com/revolution/android/MacroEngine.java
           grep -q 'joystickWithTimedTaps' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'continuationQueue=prequeued-before-acquire-completion-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
           grep -q 'callbackHandler=dedicated-handler-thread-v1' revo-android/app/src/main/java/com/revolution/android/RevoAccessibilityService.java
