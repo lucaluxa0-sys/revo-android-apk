@@ -334,7 +334,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=" + MARKER
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v9-prejump-h2-blackbear"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -351,7 +351,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", MARKER);
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v9-prejump-h2-blackbear");
             r.put("v09cHive2DirectRoute", "edges202-397-59:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
