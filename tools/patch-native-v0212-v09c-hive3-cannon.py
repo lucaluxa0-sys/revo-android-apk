@@ -19,6 +19,10 @@ once(
         CANNON_FORWARD,
 """,
 """        CLAIMED,
+        V09C_H1_YAW_0,
+        V09C_H1_BACKWARD_30,
+        V09C_H1_DIAG_BACK_RIGHT_100,
+        V09C_H1_FORWARD_ALIGN_25,
         V09C_H2_SPAWN_FORWARD_25,
         V09C_H2_BLACK_BEAR_YAW_2,
         V09C_H2_BLACK_BEAR_FORWARD_42,
@@ -73,7 +77,25 @@ claimed_anchor = """                // Mobile spawns facing the hive wall. Back 
                 }
                 break;
 """
-claimed_new = """                // This account has no parachute and the generic cannon fallback was
+claimed_new = """                // v0.9c-hotfix3 edge200 is the direct source route from hive1
+                // to sunflower-tr. Full decoded source:
+                //   SetYaw(0); SetPitch(1); SetZoom(4);
+                //   Walk({[0]=Backward,[30]={Backward,Right},
+                //         [130]={Forward,Align},[155]=End})
+                // Pitch/zoom are camera-presentation settings and are already owned
+                // by Android camera preflight. Preserve the source yaw and exact XY
+                // timeline here; WGC decides whether the mobile mapping is kept.
+                if (isSunflower(c.field) && claimedHive == 1) {
+                    Log.i(TAG, "routeMarker=" + MARKER
+                            + " edge=200 direct=sunflower-tr cannon=disabled");
+                    if (setYaw(frame, svc, 0, 0,
+                            "v0.9c edge200 hive1.sunflower-tr: SetYaw(0)")) {
+                        transitionAfterGesture(State.V09C_H1_BACKWARD_30);
+                    }
+                    break;
+                }
+
+                // This account has no parachute and the generic cannon fallback was
                 // visually disproven for hive2. Use the shortest decoded v0.9c path
                 // that contains neither a cannon node nor Parachute(). The shorter ticket
                 // route was visually disproven on Android, so use edge202 hive2->spawn,
@@ -122,7 +144,36 @@ claimed_new = """                // This account has no parachute and the generi
 """
 once(claimed_anchor, claimed_new, "CLAIMED branch")
 
-cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
+cases = r'''            case V09C_H1_YAW_0:
+                // State is retained only for diagnostics/forward compatibility;
+                // the CLAIMED branch dispatches SetYaw(0) directly and advances.
+                transition(State.V09C_H1_BACKWARD_30, "edge200-yaw0-complete");
+                break;
+            case V09C_H1_BACKWARD_30:
+                if (moveField(frame, svc, c, Direction.BACKWARD, 30.0,
+                        "v0.9c edge200: Backward30")) {
+                    transitionAfterGesture(State.V09C_H1_DIAG_BACK_RIGHT_100);
+                }
+                break;
+            case V09C_H1_DIAG_BACK_RIGHT_100:
+                // edge200 timeline stud 30..130: Backward + Right.
+                if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.RIGHT, 100.0,
+                        "v0.9c edge200: Backward+Right100")) {
+                    transitionAfterGesture(State.V09C_H1_FORWARD_ALIGN_25);
+                }
+                break;
+            case V09C_H1_FORWARD_ALIGN_25:
+                // edge200 timeline stud 130..155: Forward + Align.
+                // Existing Android direct-field routes preserve WalkAlign as the
+                // directional movement component, then use the established
+                // Sunflower center correction before e_lol starts.
+                if (moveField(frame, svc, c, Direction.FORWARD, 25.0,
+                        "v0.9c edge200: Forward+Align25")) {
+                    transitionAfterGesture(State.SUNFLOWER_ROUTE_CENTER_RIGHT);
+                    Log.i(TAG, "DIRECT_FIELD_ROUTE_REACHED endpoint=sunflower-tr edge=200");
+                }
+                break;
+            case V09C_H2_SPAWN_FORWARD_25:
                 // Finish edge202 Medium Backward75 after the concurrent first 50 studs.
                 // Keep the same hive2 vertical mapping verified by the first edge202 leg.
                 if (move(frame, svc, c, Direction.BACKWARD, 25.0,
@@ -377,7 +428,8 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear");
+"""            r.put("v09cHive1DirectRoute", "edge200:hive1->sunflower-tr");
+            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear");
             r.put("v09cHive2DirectRoute", "edges202-397-59:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
