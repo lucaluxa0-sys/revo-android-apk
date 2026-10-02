@@ -120,7 +120,12 @@ once(
         }
 
         String pkg = svc.activePackageName();
-        if (pkg == null || !pkg.contains("com.roblox.client")) {
+        boolean robloxPackage = pkg != null && pkg.contains("com.roblox.client");
+        // Accessibility's cached active package can lag behind Android's real
+        // resumed window during the Revo -> Roblox handoff. Preserve the strict
+        // foreground safety gate, but allow the stronger live active/focused
+        // Roblox application-window check to satisfy it.
+        if (!robloxPackage && !svc.isRobloxTouchWindowReady()) {
             status = "Waiting for Roblox before camera preflight";
             return false;
         }
