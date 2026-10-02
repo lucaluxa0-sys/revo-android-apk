@@ -86,7 +86,7 @@ claimed_new = """                // v0.9c-hotfix3 edge200 is the direct source r
                 // by Android camera preflight. Preserve the source yaw and exact XY
                 // timeline here; WGC decides whether the mobile mapping is kept.
                 if (isSunflower(c.field) && claimedHive == 1) {
-                    Log.i(TAG, "routeMarker=" + MARKER
+                    Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear"
                             + " edge=200 direct=sunflower-tr cannon=disabled");
                     if (setYaw(frame, svc, 0, 0,
                             "v0.9c edge200 hive1.sunflower-tr: SetYaw(0)")) {
