@@ -121,11 +121,11 @@ once(
 
         String pkg = svc.activePackageName();
         boolean robloxPackage = pkg != null && pkg.contains("com.roblox.client");
-        // Accessibility's cached active package can lag behind Android's real
-        // resumed window during the Revo -> Roblox handoff. Preserve the strict
-        // foreground safety gate, but allow the stronger live active/focused
-        // Roblox application-window check to satisfy it.
-        if (!robloxPackage && !svc.isRobloxTouchWindowReady()) {
+        boolean gameplayReady = isRobloxGameplayReady(frame);
+        // Accessibility metadata can be stale or rootless on current Roblox.
+        // Keep the package/window checks, but also accept direct visual proof:
+        // the Bee Swarm mobile gameplay HUD in the captured display frame.
+        if (!robloxPackage && !svc.isRobloxTouchWindowReady() && !gameplayReady) {
             status = "Waiting for Roblox before camera preflight";
             return false;
         }
@@ -141,16 +141,16 @@ once(
                 // dispatchGesture() can return true in that gap even though
                 // InputDispatcher later drops the touch. Do not start the settle
                 // timer or consume retries until a live Roblox window/root exists.
-                if (!svc.isRobloxTouchWindowReady()) {
+                if (!svc.isRobloxTouchWindowReady() && !gameplayReady) {
                     cameraPreflightGameplayReadyFrames = 0;
                     cameraPreflightNextAtMs = 0;
                     status = "Camera preflight: waiting for touch-ready Roblox window";
                     return false;
                 }
-                // A live Roblox application window also exists on Home/join/loading
-                // screens. Require the actual mobile gameplay controls before a
-                // pause-menu retry can be consumed.
-                if (!isRobloxGameplayReady(frame)) {
+                // Require the actual mobile gameplay controls before a pause-menu
+                // retry can be consumed. This visual gate also safely covers
+                // rootless Accessibility windows.
+                if (!gameplayReady) {
                     cameraPreflightGameplayReadyFrames = 0;
                     cameraPreflightNextAtMs = 0;
                     status = "Camera preflight: waiting for Bee Swarm gameplay HUD";
@@ -196,7 +196,7 @@ once(
                     // If rotation/loading temporarily removes Roblox's actionable
                     // Accessibility window, wait without burning a retry. A queued
                     // dispatchGesture is not proof the touch reached Roblox.
-                    if (!svc.isRobloxTouchWindowReady()) {
+                    if (!svc.isRobloxTouchWindowReady() && !isRobloxGameplayReady(frame)) {
                         cameraPreflightNextAtMs = now + 250;
                         status = "Camera preflight: waiting for touch-ready Roblox window";
                         return false;
