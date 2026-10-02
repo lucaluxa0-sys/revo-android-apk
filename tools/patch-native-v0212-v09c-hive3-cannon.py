@@ -412,9 +412,16 @@ cases = r'''            case V09C_H1_YAW_0:
                     break;
                 }
                 Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear"
-                        + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
-                transition(State.READY_AT_CANNON,
-                        "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
+                        + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds
+                        + " recovery=mobile-black-bear");
+                // WGC at this exact endpoint shows the avatar hard against the
+                // brown wall where the existing mobile Black Bear wall recovery
+                // was originally calibrated. Do not run the desktop cannon->
+                // Black Bear leg first; that moves the avatar away from the
+                // recovery anchor toward the leaderboard.
+                blackBearCheckpointAttempts = 0;
+                transition(State.MOBILE_BLACK_BEAR_RECOVER_YAW,
+                        "v0.9c locked-cannon brown-wall endpoint; mobile Black Bear recovery");
                 break;
             }
 '''
