@@ -4,7 +4,7 @@ from pathlib import Path
 p = Path("revo-android/app/src/main/java/com/revolution/android/RevoPreGatherRouter.java")
 s = p.read_text(encoding="utf-8")
 
-MARKER = "v09c-hive234-sunflower-no-parachute-v9-prejump-h2-blackbear"
+MARKER = "v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear"
 if MARKER in s:
     raise SystemExit("v0.9c hive3/hive4 cannon patch already applied")
 
@@ -276,13 +276,39 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                 }
                 break;
             }
-            case V09C_H3_JUMP_CANNON_RIGHT_20:
-                // jump_cannon.lua: KeyDown(Right); SleepStuds(20)
-                if (move(frame, svc, c, Direction.RIGHT, 20.0,
-                        "v0.9c jump_cannon: Right 20")) {
-                    transitionAfterGesture(State.V09C_H3_JUMP_CANNON_RIGHT_8);
+            case V09C_H3_JUMP_CANNON_RIGHT_20: {
+                // Desktop jump_cannon keeps Right held continuously: Right20,
+                // jump at the start of the next Right8, then continues Right.
+                // WGC proved the previous Android split-state port lost the
+                // required run-up/momentum near the hive-side brown ramp.
+                // Reuse the already-accepted serialized timed-tap joystick path:
+                // preserve 28 studs of Right movement and insert Space at the
+                // source-faithful 20-stud offset without an extra state/frame gap.
+                long holdMs = RevoMovementSpeed.durationMs(
+                        28.0, c.baseMoveSpeed, c.msPerStud,
+                        c.hasteStacks, c.hastePlus, c.coconutHaste, c.bearMorph,
+                        c.oil, c.superSmoothie, MAX_GESTURE_MS);
+                long jumpOffsetMs = RevoMovementSpeed.durationMs(
+                        20.0, c.baseMoveSpeed, c.msPerStud,
+                        c.hasteStacks, c.hastePlus, c.coconutHaste, c.bearMorph,
+                        c.oil, c.superSmoothie, MAX_GESTURE_MS);
+                float w = frame.getWidth(), h = frame.getHeight();
+                float cx = (float)(w * c.joyX), cy = (float)(h * c.joyY);
+                float r = (float)(Math.min(w, h) * c.joyR);
+                float jumpX = (float)(w * c.jumpX), jumpY = (float)(h * c.jumpY);
+                boolean accepted = svc.joystickWithTimedTaps(
+                        displayId, cx, cy, cx + r, cy,
+                        holdMs, jumpX, jumpY, 100L,
+                        new long[]{jumpOffsetMs});
+                recordGesture(accepted,
+                        "v0.9c jump_cannon: continuous Right28 + Space@Right20"
+                                + " holdMs=" + holdMs + " jumpOffsetMs=" + jumpOffsetMs);
+                nextActionAtMs = now + holdMs + 120L;
+                if (accepted) {
+                    transitionKeepDeadline(State.V09C_H3_JUMP_CANNON_DIAG_6);
                 }
                 break;
+            }
             case V09C_H3_JUMP_CANNON_RIGHT_8: {
                 // Source jump_cannon.lua jumps at the START of this Right8 segment.
                 // The generic Android timed-tap adapter intentionally delays an
@@ -334,7 +360,7 @@ cases = r'''            case V09C_H2_SPAWN_FORWARD_25:
                     }
                     break;
                 }
-                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v9-prejump-h2-blackbear"
+                Log.i(TAG, "routeMarker=v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear"
                         + " promptAbsent=true boundedProbeStuds=" + v09cCannonProbeStuds);
                 transition(State.READY_AT_CANNON,
                         "v0.9c hive3/4 bounded cannon endpoint; Press E unavailable");
@@ -351,7 +377,7 @@ cases + """            case CANNON_FORWARD:
 once(
 """            r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
 """,
-"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v9-prejump-h2-blackbear");
+"""            r.put("v09cHive3CannonRoute", "v09c-hive234-sunflower-no-parachute-v10-timedjump-h2-blackbear");
             r.put("v09cHive2DirectRoute", "edges202-397-59:no-cannon:no-parachute");
             r.put("v09cCannonProbeStuds", v09cCannonProbeStuds);
             r.put("fieldRouteSource", "Revolution v0.9c-hotfix3 datasets/v8/patterns.bin");
