@@ -3,7 +3,7 @@ name: Build Revolution Android v0.2.12 phone preview APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, bluestacks-claimed-hive-test ]
+    branches: [ main, bluestacks-claimed-hive-test, tmp/build-165a1e3-route203 ]
     paths:
       - '.github/workflows/build-v0212-phone-preview.yml'
       - 'tools/patch-native-v0211-bee-swarm-launch.py'
@@ -223,7 +223,7 @@ jobs:
           PY
           # This branch-only package ID lets runtime route QA coexist with the
           # signed stable Revo install without uninstalling or touching its data.
-          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" ]]; then
+          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" || "$GITHUB_REF_NAME" == "tmp/build-165a1e3-route203" ]]; then
             python3 tools/patch-native-v0212-route203-test-package.py
           fi
 
@@ -238,7 +238,7 @@ jobs:
           test -s "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
           grep -q "versionName='0.2.12-phone-preview'" /tmp/badging.txt
-          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" ]]; then
+          if [[ "$GITHUB_REF_NAME" == "test/v09c-hive3-cannon" || "$GITHUB_REF_NAME" == "tmp/build-165a1e3-route203" ]]; then
             grep -q "package: name='com.revolution.android.route203test'" /tmp/badging.txt
           fi
           unzip -p "$APK" assets/www/android-wails-shim.js > /tmp/apk-android-wails-shim.js
