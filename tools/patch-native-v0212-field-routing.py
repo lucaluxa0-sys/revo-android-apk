@@ -450,22 +450,18 @@ new_ready = r'''            case READY_AT_CANNON:
                 transition(State.MOBILE_SUNFLOWER_DIRECT_JUMP,
                         "mobile sunflower direct entry boundary ready");
                 break;
-            case MOBILE_SUNFLOWER_DIRECT_JUMP: {
-                float w = frame.getWidth(), h = frame.getHeight();
-                float jumpX = (float)(w * c.jumpX), jumpY = (float)(h * c.jumpY);
-                boolean accepted = svc.tap(displayId, jumpX, jumpY, 100L);
-                recordGesture(accepted,
-                        "mobile sunflower direct entry: Space100 before Forward12");
-                nextActionAtMs = now + 120L;
-                if (accepted) transitionKeepDeadline(State.MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE);
-                break;
-            }
-            case MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE:
-                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
-                        "mobile sunflower direct entry: Forward12 over field lip")) {
-                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER);
+            case MOBILE_SUNFLOWER_DIRECT_JUMP:
+                // No-Haste full-run WGC on c110190 proved Forward8 reaches a
+                // vertical white fence post. Jump+Forward12 is blocked there.
+                // Earlier Left8 evidence came from a Haste-shifted endpoint, so
+                // retest Left8 specifically from this no-Haste boundary anchor.
+                if (moveField(frame, svc, c, Direction.LEFT, 8.0,
+                        "mobile sunflower no-haste boundary diagnostic: Left8 from fence post")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE);
                 }
                 break;
+            case MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE:
+                return fail("mobile sunflower no-haste boundary diagnostic Left8 complete");
             case MOBILE_SUNFLOWER_DIRECT_CENTER:
                 // e6468a8 WGC proved this second Forward12 reaches Sunflower tiles.
                 // Do not try to sidestep the nearby tree in the current yaw; the
