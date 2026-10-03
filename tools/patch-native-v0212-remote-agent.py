@@ -217,6 +217,75 @@ public final class RevoRemoteAgent {
                 }
             }
 
+            // route203test-only loopback QA gesture surface. This never exposes shell/code
+            // execution and is intentionally unavailable to production package IDs or
+            // non-loopback peers. It exists only to calibrate the exact Accessibility
+            // joystick/camera implementation while Roblox remains foreground.
+            if ("POST".equals(method) && "/v1/qa-gesture".equals(path)) {
+                if (!context.getPackageName().endsWith(".route203test") ||
+                        s.getInetAddress() == null || !s.getInetAddress().isLoopbackAddress()) {
+                    respond(s, 403, json("error", "qa_forbidden"));
+                    return;
+                }
+                RevoAccessibilityService svc = RevoAccessibilityService.get();
+                if (svc == null) {
+                    respond(s, 503, json("error", "accessibility_unavailable"));
+                    return;
+                }
+                String kind = headers.getOrDefault("x-revo-qa-kind", "").trim().toLowerCase(Locale.US);
+                int durationMs = 167;
+                try {
+                    durationMs = Math.max(50, Math.min(2000,
+                            Integer.parseInt(headers.getOrDefault("x-revo-qa-duration-ms", "167"))));
+                } catch (Exception ignored) {}
+                android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+                float width = Math.max(1, dm.widthPixels);
+                float height = Math.max(1, dm.heightPixels);
+                float cx = width * 0.094f;
+                float cy = height * 0.843f;
+                float radius = Math.min(width, height) * 0.085f;
+                float dx = 0f, dy = 0f;
+                boolean accepted;
+                if ("yaw-left".equals(kind) || "yaw-right".equals(kind)) {
+                    int steps = 1;
+                    try {
+                        steps = Math.max(1, Math.min(4,
+                                Integer.parseInt(headers.getOrDefault("x-revo-qa-steps", "1"))));
+                    } catch (Exception ignored) {}
+                    if ("yaw-left".equals(kind)) steps = -steps;
+                    accepted = svc.cameraYawSteps(0, width, height, steps, 110L, 45L);
+                } else {
+                    switch (kind) {
+                        case "forward": dy = -1f; break;
+                        case "backward": dy = 1f; break;
+                        case "left": dx = -1f; break;
+                        case "right": dx = 1f; break;
+                        case "forward-left": dx = -1f; dy = -1f; break;
+                        case "forward-right": dx = 1f; dy = -1f; break;
+                        case "backward-left": dx = -1f; dy = 1f; break;
+                        case "backward-right": dx = 1f; dy = 1f; break;
+                        default:
+                            respond(s, 400, json("error", "bad_qa_kind"));
+                            return;
+                    }
+                    float norm = (float)Math.max(1.0, Math.sqrt(dx * dx + dy * dy));
+                    float tx = cx + radius * dx / norm;
+                    float ty = cy + radius * dy / norm;
+                    accepted = svc.joystick(0, cx, cy, tx, ty, durationMs);
+                }
+                Log.i(TAG, "qaGesture kind=" + kind + " durationMs=" + durationMs +
+                        " accepted=" + accepted + " size=" + (int)width + "x" + (int)height +
+                        " center=(" + cx + "," + cy + ") radius=" + radius);
+                respond(s, accepted ? 200 : 409,
+                        "{\"accepted\":" + accepted +
+                        ",\"kind\":\"" + escape(kind) + "\"" +
+                        ",\"width\":" + (int)width +
+                        ",\"height\":" + (int)height +
+                        ",\"centerX\":" + cx +
+                        ",\"centerY\":" + cy +
+                        ",\"radius\":" + radius + "}");
+                return;
+            }
             if ("GET".equals(method) && "/v1/ping".equals(path)) {
                 respond(s, 200, "{\"agent\":\"revo-physical-v1\",\"paired\":" + isPaired() + ",\"port\":" + PORT + "}");
                 return;
