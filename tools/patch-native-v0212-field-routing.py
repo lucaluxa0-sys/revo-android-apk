@@ -412,13 +412,13 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 return fail("mobile Black Bear wall recovery prompt not found");
             case MOBILE_SUNFLOWER_LEFT_PROBE_DONE:
-                if (moveField(frame, svc, c, Direction.FORWARD, 24.0,
-                        "mobile sunflower diagnostic: Forward24 after Left48")) {
+                if (moveField(frame, svc, c, Direction.BACKWARD, 24.0,
+                        "mobile sunflower diagnostic: Backward24 after Left48")) {
                     transitionAfterGesture(State.MOBILE_SUNFLOWER_FORWARD_PROBE_DONE);
                 }
                 break;
             case MOBILE_SUNFLOWER_FORWARD_PROBE_DONE:
-                return fail("mobile sunflower diagnostic Left48+Forward24 complete");
+                return fail("mobile sunflower diagnostic Left48+Backward24 complete");
             case SUNFLOWER_ROUTE_LEFT:
                 if (moveField(frame, svc, c, Direction.LEFT, 30.0,
                         "desktop black-bear.sunflower-tr: Walk Left 30")) {
