@@ -183,12 +183,13 @@ cases = r'''            case V09C_H1_YAW_0:
                 }
                 break;
             case V09C_H2_BLACK_BEAR_YAW_2:
-                // Current mobile preflight leaves the camera facing back toward the
-                // hive wall at the edge202 endpoint. WGC disproved both physical
-                // quarter-turns: slot 6 enters Basic Shop; slot 2 enters the
-                // leaderboard/shop fence. Test only the remaining straight-away
-                // heading (slot 4 / 180 degrees) before changing any edge397 lengths.
-                if (setYaw(frame, svc, 4, 0, "v0.9c edge397: mobile hive-wall-away SetYaw(4) test")) {
+                // v0.9c edge397 spawn.black-bear begins at desktop yaw slot 2.
+                // Live WGC on Android showed the +2 physical camera turn points the
+                // first Forward42 directly into the Shop fence. Mirror only this
+                // edge's physical turn (-2 via slot 6), then restore the logical
+                // desktop slot to 2 so downstream absolute-yaw bookkeeping is unchanged.
+                if (setYaw(frame, svc, 6, 0, "v0.9c edge397: desktop SetYaw(2) -> mobile physical -2")) {
+                    currentYawSlot = 2;
                     transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_42);
                 }
                 break;
@@ -200,12 +201,9 @@ cases = r'''            case V09C_H1_YAW_0:
                 }
                 break;
             case V09C_H2_BLACK_BEAR_DIAG_36:
-                // Current mobile WGC shows the desktop Left leg carries the avatar
-                // along the leaderboard/shop fence while the Black Bear side remains
-                // opposite. Test the same horizontal mirror already required by
-                // edge468: preserve Forward36 but map desktop Left -> mobile Right.
-                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.RIGHT, 36.0,
-                        "v0.9c edge397: desktop Forward+Left36 -> mobile Forward+Right36 test")) {
+                // Walk timeline: Forward+Left from stud 42 to 78.
+                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.LEFT, 36.0,
+                        "v0.9c edge397: Forward+Left36")) {
                     transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_57);
                 }
                 break;
