@@ -35,6 +35,10 @@ router = replace_once(
         MOBILE_SUNFLOWER_LEFT_PROBE_DONE,
         MOBILE_SUNFLOWER_FORWARD_PROBE_DONE,
         MOBILE_SUNFLOWER_BLACK_BEAR_SEEK_DONE,
+        MOBILE_SUNFLOWER_DIRECT_APPROACH,
+        MOBILE_SUNFLOWER_DIRECT_JUMP,
+        MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE,
+        MOBILE_SUNFLOWER_DIRECT_CENTER,
         SUNFLOWER_ROUTE_LEFT,
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
@@ -429,7 +433,44 @@ new_ready = r'''            case READY_AT_CANNON:
             case MOBILE_SUNFLOWER_BLACK_BEAR_SEEK_DONE:
                 if (beginSunflowerFromMobileBlackBear(frame, svc,
                         "mobile sunflower staged recovery: prompt after Left24")) break;
-                return fail("mobile sunflower diagnostic Left48+Backward24+Left24 complete; Black Bear prompt not found");
+                // WGC on the strict-detector a16bb7d run proved that this endpoint
+                // is still in the starter area but only one short forward leg from
+                // the Sunflower boundary. Do not keep searching for Black Bear here:
+                // use the measured direct field entry instead.
+                if (moveField(frame, svc, c, Direction.FORWARD, 8.0,
+                        "mobile sunflower direct entry: Forward8 to field boundary")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_JUMP);
+                }
+                break;
+            case MOBILE_SUNFLOWER_DIRECT_APPROACH:
+                // Reserved for a future visual boundary detector; the measured
+                // a16bb7d endpoint currently reaches the boundary in the prior state.
+                transition(State.MOBILE_SUNFLOWER_DIRECT_JUMP,
+                        "mobile sunflower direct entry boundary ready");
+                break;
+            case MOBILE_SUNFLOWER_DIRECT_JUMP: {
+                float w = frame.getWidth(), h = frame.getHeight();
+                float jumpX = (float)(w * c.jumpX), jumpY = (float)(h * c.jumpY);
+                boolean accepted = svc.tap(displayId, jumpX, jumpY, 100L);
+                recordGesture(accepted,
+                        "mobile sunflower direct entry: Space100 before Forward12");
+                nextActionAtMs = now + 120L;
+                if (accepted) transitionKeepDeadline(State.MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE);
+                break;
+            }
+            case MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE:
+                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
+                        "mobile sunflower direct entry: Forward12 over field lip")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER);
+                }
+                break;
+            case MOBILE_SUNFLOWER_DIRECT_CENTER:
+                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
+                        "mobile sunflower direct entry: Forward12 inward")) {
+                    transitionAfterGesture(State.FIELD_READY);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=hive3-direct-sunflower-entry-v1 field=" + c.field);
+                }
+                break;
             case SUNFLOWER_ROUTE_LEFT:
                 if (moveField(frame, svc, c, Direction.LEFT, 30.0,
                         "desktop black-bear.sunflower-tr: Walk Left 30")) {
