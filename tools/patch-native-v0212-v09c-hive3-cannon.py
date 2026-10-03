@@ -200,9 +200,12 @@ cases = r'''            case V09C_H1_YAW_0:
                 }
                 break;
             case V09C_H2_BLACK_BEAR_DIAG_36:
-                // Walk timeline: Forward+Left from stud 42 to 78.
-                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.LEFT, 36.0,
-                        "v0.9c edge397: Forward+Left36")) {
+                // Current mobile WGC shows the desktop Left leg carries the avatar
+                // along the leaderboard/shop fence while the Black Bear side remains
+                // opposite. Test the same horizontal mirror already required by
+                // edge468: preserve Forward36 but map desktop Left -> mobile Right.
+                if (moveDiagonal(frame, svc, c, Direction.FORWARD, Direction.RIGHT, 36.0,
+                        "v0.9c edge397: desktop Forward+Left36 -> mobile Forward+Right36 test")) {
                     transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_57);
                 }
                 break;
