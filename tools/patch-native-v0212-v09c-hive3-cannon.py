@@ -184,12 +184,11 @@ cases = r'''            case V09C_H1_YAW_0:
                 break;
             case V09C_H2_BLACK_BEAR_YAW_2:
                 // v0.9c edge397 spawn.black-bear begins at desktop yaw slot 2.
-                // Live WGC on Android showed the +2 physical camera turn points the
-                // first Forward42 directly into the Shop fence. Mirror only this
-                // edge's physical turn (-2 via slot 6), then restore the logical
-                // desktop slot to 2 so downstream absolute-yaw bookkeeping is unchanged.
-                if (setYaw(frame, svc, 6, 0, "v0.9c edge397: desktop SetYaw(2) -> mobile physical -2")) {
-                    currentYawSlot = 2;
+                // Current WGC with corrected edge202 + Classic preflight shows the
+                // mirrored physical slot 6 sends Forward42 straight to Open Shop.
+                // Retry the source-faithful physical +2 turn on this newer baseline;
+                // this is intentionally isolated so WGC can KEEP/REVERT it cleanly.
+                if (setYaw(frame, svc, 2, 0, "v0.9c edge397: source SetYaw(2) physical +2 retry")) {
                     transitionAfterGesture(State.V09C_H2_BLACK_BEAR_FORWARD_42);
                 }
                 break;
