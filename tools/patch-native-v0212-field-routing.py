@@ -39,7 +39,8 @@ router = replace_once(
         MOBILE_SUNFLOWER_DIRECT_JUMP,
         MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE,
         MOBILE_SUNFLOWER_DIRECT_CENTER,
-        MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD,
+        MOBILE_SUNFLOWER_DIRECT_CENTER_YAW_0,
+        MOBILE_SUNFLOWER_DIRECT_CENTER_LEFT_37,
         SUNFLOWER_ROUTE_LEFT,
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
@@ -466,20 +467,28 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_CENTER:
-                // e6468a8 WGC proved the prior Forward12 crossed the field lip,
-                // but a second straight Forward12 converged on the nearby tree.
-                // Sidestep on the flower side BEFORE reaching the trunk; the
-                // same Left8 applied after collision was correctly rejected.
-                if (moveField(frame, svc, c, Direction.LEFT, 8.0,
-                        "mobile sunflower direct entry: Left8 before tree")) {
-                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD);
+                // e6468a8 WGC proved this second Forward12 reaches Sunflower tiles.
+                // Do not try to sidestep the nearby tree in the current yaw; the
+                // dada3c3 Left8 experiment was visually rejected. Instead restore
+                // the exact yaw used by the previously accepted Left37 center.
+                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
+                        "mobile sunflower direct entry: Forward12 inward")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER_YAW_0);
                 }
                 break;
-            case MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD:
-                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
-                        "mobile sunflower direct entry: Forward12 inward after Left8")) {
+            case MOBILE_SUNFLOWER_DIRECT_CENTER_YAW_0:
+                if (setYaw(frame, svc, 0, 0,
+                        "mobile sunflower direct entry: SetYaw(0) for proven Left37 center")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER_LEFT_37);
+                }
+                break;
+            case MOBILE_SUNFLOWER_DIRECT_CENTER_LEFT_37:
+                // Reuse the exact real-field correction accepted in e45252a and
+                // retained by the 237af0a 60s in-field gather QA.
+                if (moveField(frame, svc, c, Direction.LEFT, 37.0,
+                        "mobile sunflower: proven center Left 37 before gather")) {
                     transitionAfterGesture(State.FIELD_READY);
-                    Log.i(TAG, "FIELD_ROUTE_READY route=hive3-direct-sunflower-entry-v2-left8 field=" + c.field);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=hive3-direct-sunflower-entry-v3-yaw0-left37 field=" + c.field);
                 }
                 break;
             case SUNFLOWER_ROUTE_LEFT:
