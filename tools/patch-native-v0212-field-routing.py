@@ -33,6 +33,7 @@ router = replace_once(
         MOBILE_BLACK_BEAR_RECOVER_DIAGONAL,
         MOBILE_BLACK_BEAR_RECOVER_DETECT,
         MOBILE_SUNFLOWER_LEFT_PROBE_DONE,
+        MOBILE_SUNFLOWER_FORWARD_PROBE_DONE,
         SUNFLOWER_ROUTE_LEFT,
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
@@ -411,7 +412,13 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 return fail("mobile Black Bear wall recovery prompt not found");
             case MOBILE_SUNFLOWER_LEFT_PROBE_DONE:
-                return fail("mobile sunflower diagnostic Left48 complete");
+                if (moveField(frame, svc, c, Direction.FORWARD, 24.0,
+                        "mobile sunflower diagnostic: Forward24 after Left48")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_FORWARD_PROBE_DONE);
+                }
+                break;
+            case MOBILE_SUNFLOWER_FORWARD_PROBE_DONE:
+                return fail("mobile sunflower diagnostic Left48+Forward24 complete");
             case SUNFLOWER_ROUTE_LEFT:
                 if (moveField(frame, svc, c, Direction.LEFT, 30.0,
                         "desktop black-bear.sunflower-tr: Walk Left 30")) {
