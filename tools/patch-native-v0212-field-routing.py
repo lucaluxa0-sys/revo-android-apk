@@ -39,6 +39,7 @@ router = replace_once(
         MOBILE_SUNFLOWER_DIRECT_JUMP,
         MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE,
         MOBILE_SUNFLOWER_DIRECT_CENTER,
+        MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD,
         SUNFLOWER_ROUTE_LEFT,
         SUNFLOWER_ROUTE_BACKWARD,
         SUNFLOWER_ROUTE_ALIGN_RIGHT,
@@ -465,10 +466,20 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_CENTER:
+                // e6468a8 WGC proved the prior Forward12 crossed the field lip,
+                // but a second straight Forward12 converged on the nearby tree.
+                // Sidestep on the flower side BEFORE reaching the trunk; the
+                // same Left8 applied after collision was correctly rejected.
+                if (moveField(frame, svc, c, Direction.LEFT, 8.0,
+                        "mobile sunflower direct entry: Left8 before tree")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD);
+                }
+                break;
+            case MOBILE_SUNFLOWER_DIRECT_CENTER_FORWARD:
                 if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
-                        "mobile sunflower direct entry: Forward12 inward")) {
+                        "mobile sunflower direct entry: Forward12 inward after Left8")) {
                     transitionAfterGesture(State.FIELD_READY);
-                    Log.i(TAG, "FIELD_ROUTE_READY route=hive3-direct-sunflower-entry-v1 field=" + c.field);
+                    Log.i(TAG, "FIELD_ROUTE_READY route=hive3-direct-sunflower-entry-v2-left8 field=" + c.field);
                 }
                 break;
             case SUNFLOWER_ROUTE_LEFT:
