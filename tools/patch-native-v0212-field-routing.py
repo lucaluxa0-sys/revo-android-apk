@@ -445,23 +445,23 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_APPROACH:
-                // Reserved for a future visual boundary detector; the measured
-                // a16bb7d endpoint currently reaches the boundary in the prior state.
-                transition(State.MOBILE_SUNFLOWER_DIRECT_JUMP,
-                        "mobile sunflower direct entry boundary ready");
-                break;
+                return fail("mobile sunflower no-haste native Backward+Right8 diagnostic complete");
             case MOBILE_SUNFLOWER_DIRECT_JUMP:
-                // No-Haste full-run WGC on c110190 proved Forward8 reaches a
-                // vertical white fence post. Jump+Forward12 is blocked there.
-                // Earlier Left8 evidence came from a Haste-shifted endpoint, so
-                // retest Left8 specifically from this no-Haste boundary anchor.
-                if (moveField(frame, svc, c, Direction.LEFT, 8.0,
-                        "mobile sunflower no-haste boundary diagnostic: Left8 from fence post")) {
+                // Exact-anchor stationary survey showed Sunflower ahead at yaw 0,
+                // with the avatar trapped between the gray wall and raised field curb.
+                // Raw ADB swipes were inconclusive, so test the open back-right
+                // quadrant through the SAME Accessibility joystick path as the macro.
+                if (setYaw(frame, svc, 0, 0,
+                        "mobile sunflower no-haste native probe: SetYaw(0)")) {
                     transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE);
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_JUMP_MOVE:
-                return fail("mobile sunflower no-haste boundary diagnostic Left8 complete");
+                if (moveDiagonal(frame, svc, c, Direction.BACKWARD, Direction.RIGHT, 8.0,
+                        "mobile sunflower no-haste native probe: Backward+Right8")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_APPROACH);
+                }
+                break;
             case MOBILE_SUNFLOWER_DIRECT_CENTER:
                 // e6468a8 WGC proved this second Forward12 reaches Sunflower tiles.
                 // Do not try to sidestep the nearby tree in the current yaw; the
