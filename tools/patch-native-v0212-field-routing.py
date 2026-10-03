@@ -445,7 +445,11 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_APPROACH:
-                return fail("mobile sunflower no-haste native Backward+Right8 diagnostic complete");
+                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
+                        "mobile sunflower native shop-platform probe: Forward12")) {
+                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER);
+                }
+                break;
             case MOBILE_SUNFLOWER_DIRECT_JUMP:
                 // Exact-anchor stationary survey showed Sunflower ahead at yaw 0,
                 // with the avatar trapped between the gray wall and raised field curb.
@@ -463,15 +467,7 @@ new_ready = r'''            case READY_AT_CANNON:
                 }
                 break;
             case MOBILE_SUNFLOWER_DIRECT_CENTER:
-                // e6468a8 WGC proved this second Forward12 reaches Sunflower tiles.
-                // Do not try to sidestep the nearby tree in the current yaw; the
-                // dada3c3 Left8 experiment was visually rejected. Instead restore
-                // the exact yaw used by the previously accepted Left37 center.
-                if (moveField(frame, svc, c, Direction.FORWARD, 12.0,
-                        "mobile sunflower direct entry: Forward12 inward")) {
-                    transitionAfterGesture(State.MOBILE_SUNFLOWER_DIRECT_CENTER_YAW_0);
-                }
-                break;
+                return fail("mobile sunflower native shop-platform Forward12 diagnostic complete");
             case MOBILE_SUNFLOWER_DIRECT_CENTER_YAW_0:
                 if (setYaw(frame, svc, 0, 0,
                         "mobile sunflower direct entry: SetYaw(0) for proven Left37 center")) {
