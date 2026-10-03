@@ -522,9 +522,10 @@ helpers = r'''    private boolean isPineTree(String field) {
             if (found) matched++;
         }
 
-        // Current 960x540 WGC: Talk to Black Bear=6/7; occupied Send Trade=4/7.
-        // Keep the original >=5 discriminator while dynamically aligning Y.
-        return matched >= 5;
+        // Current QA corpus: real Talk to Black Bear=6-7/7; all saved non-Black-Bear
+        // mobile banners are <=5/7 (including Claim Hive and Make Honey).
+        // Require 6/7 so hive prompts cannot false-trigger FIELD_READY.
+        return matched >= 6;
     }
 
     private boolean beginSunflowerFromMobileBlackBear(Bitmap frame,
