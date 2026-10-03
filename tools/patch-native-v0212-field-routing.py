@@ -403,15 +403,15 @@ new_ready = r'''            case READY_AT_CANNON:
                 if (isSunflower(c.field)) {
                     // Diagnostic only: WGC disproved Right24 from this endpoint.
                     // Test the opposite lateral vector as one reversible movement.
-                    if (moveField(frame, svc, c, Direction.LEFT, 24.0,
-                            "mobile sunflower diagnostic: Left24 from recovery endpoint")) {
+                    if (moveField(frame, svc, c, Direction.LEFT, 48.0,
+                            "mobile sunflower diagnostic: Left48 from recovery endpoint")) {
                         transitionAfterGesture(State.MOBILE_SUNFLOWER_LEFT_PROBE_DONE);
                     }
                     break;
                 }
                 return fail("mobile Black Bear wall recovery prompt not found");
             case MOBILE_SUNFLOWER_LEFT_PROBE_DONE:
-                return fail("mobile sunflower diagnostic Left24 complete");
+                return fail("mobile sunflower diagnostic Left48 complete");
             case SUNFLOWER_ROUTE_LEFT:
                 if (moveField(frame, svc, c, Direction.LEFT, 30.0,
                         "desktop black-bear.sunflower-tr: Walk Left 30")) {
