@@ -46,6 +46,20 @@ jobs:
           assert x['actions'][-1]['direction']=='RIGHT'
           print('PASS: 18 source-derived, bounded gather movements')
           PY
+      - name: Validate opt-in frontend bridge and research controls (no game input)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 research/revo-plan/tools/patch_android_config_plan_intake.py \
+            --source patches/android-backend-v0.2.9.js \
+            --output /tmp/revo-research-opt-in-backend.js
+          node --check /tmp/revo-research-opt-in-backend.js
+          node research/revo-plan/tools/test_android_frontend_plan.cjs \
+            /tmp/revo-research-opt-in-backend.js /tmp/e_lol.json
+          node --check research/revo-plan/ui/research-ui.js
+          node research/revo-plan/tools/test_research_ui.cjs \
+            research/revo-plan/ui/research-ui.js /tmp/e_lol.json
+          cmp /tmp/e_lol.json research/revo-plan/plans/e_lol.json
       - name: Verify real Java plan loader and native adapter (no input)
         shell: bash
         run: |
@@ -107,10 +121,35 @@ jobs:
           cp research/revo-plan/android-sandbox/RevoActionPlan.java "$JAVA/RevoActionPlan.java"
           grep -q 'enablePlannedExecution' "$JAVA/RevoGatherAdapter.java"
           grep -q 'class RevoActionPlan' "$JAVA/RevoActionPlan.java"
+          python3 research/revo-plan/tools/prepare_research_preview.py \
+            --android-root revo-android
+          node --check revo-android/app/src/main/assets/www/research-ui.js
+          ! grep -q 'remoteAgent.start();' "$JAVA/MainActivity.java"
           gradle -p revo-android --stacktrace :app:assembleDebug
-          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+          APK=revo-android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" > /tmp/revo-research-badging.txt
+          grep -q "name='com.revolution.android.rearesearch'" /tmp/revo-research-badging.txt
+          grep -q "versionName='0.2.12-rea-research'" /tmp/revo-research-badging.txt
+          grep -q "launchable-activity: name='com.revolution.android.MainActivity'" /tmp/revo-research-badging.txt
+          python3 - <<'PY'
+          import zipfile
+          apk='revo-android/app/build/outputs/apk/debug/app-debug.apk'
+          required={
+              'assets/www/index.android.html',
+              'assets/www/research-ui.js',
+              'assets/www/research-ui.css',
+              'assets/www/revo-plans/e_lol.json',
+          }
+          with zipfile.ZipFile(apk) as z:
+              missing=required-set(z.namelist())
+              assert not missing, f'missing required preview files: {missing}'
+              page=z.read('assets/www/index.android.html').decode('utf-8')
+              assert 'Research Preview' in page and 'authorize' in page
+          print('PASS: distinct research APK, working local UI assets and plan fixture')
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: research-only-revo-plan-intake-apk
+          name: revo-rea-isolated-research-preview-apk
           path: revo-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 3

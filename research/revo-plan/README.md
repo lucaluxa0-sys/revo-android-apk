@@ -18,6 +18,18 @@ desktop macro, bypass any account/licensing mechanism, or send game input itself
   `enablePlannedExecution:true`. The old hardcoded `e_lol` remains as fallback.
 - Native gesture dispatch still uses the existing app's display-scoped
   accessibility engine and Roblox-foreground check. No gesture is fired in tests.
+- `ui/` is an original, standalone Android research control screen with a
+  viewable sample plan, current native engine status, and Stop/Pause/Start buttons.
+  Its **Start is disabled** unless the user loads a supported source-checked
+  Sunflower/`e_lol` plan, grants Accessibility, and ticks an authorization box.
+- `prepare_research_preview.py` gives the experimental APK the separate package
+  `com.revolution.android.rearesearch`, so installing it won't replace the
+  existing Revo app. It disables activity-intent autostart and the remote agent
+  listener in the preview, leaving only explicit on-screen Start.
+- `patch_android_config_plan_intake.py` optionally adapts the existing desktop
+  Wails Android overlay to accept a plan via `revo.research.actionPlanV1` storage;
+  its Start wrapper fails closed when a plan is invalid. This path is tested
+  separately and is **not used** by the self-contained research preview UI.
 
 ## Execute the compiler locally
 
@@ -52,8 +64,11 @@ pattern, finite distances, gesture duration, calibration and allowed actions.
   movement calibration, invalid distances and unsupported commands.
 - The host Java tests compile the actual plan validator against `org.json`
   and exercise the adapter configuration path using no-input Android stubs.
-- A separate CI research gate must compile the patched Android application
-  before treating this work as build-ready. The actual phone has NOT been tested.
+- Research CI tests the optional Wails overlay and original research UI
+  without device input, compiles the patched Android application, and checks
+  that its research package ID and local HTML/CSS/JS/sample assets are present.
+- **The actual phone has NOT been tested**, the experimental APK has not been
+  installed, and a successful build is not proof of in-game movement.
 
 ## Scope, provenance and licensing
 

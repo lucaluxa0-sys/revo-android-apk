@@ -1,0 +1,117 @@
+{
+  "schema": "revo.action-plan.v1",
+  "pattern": "e_lol",
+  "sourceSha256": "042c8989b87e8faf109ffb54a7ea9b41f516c4652c9947592b467e4ca943648c",
+  "movementMsPerStud": 62.5,
+  "dryRunOnly": true,
+  "actions": [
+    {
+      "type": "walk",
+      "direction": "LEFT",
+      "studs": 10,
+      "durationMs": 625
+    },
+    {
+      "type": "walk",
+      "direction": "BACKWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "RIGHT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "FORWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "RIGHT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "BACKWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "RIGHT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "FORWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "RIGHT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "BACKWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "LEFT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "FORWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "LEFT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "BACKWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "LEFT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "FORWARD",
+      "studs": 20,
+      "durationMs": 1250
+    },
+    {
+      "type": "walk",
+      "direction": "LEFT",
+      "studs": 5,
+      "durationMs": 313
+    },
+    {
+      "type": "walk",
+      "direction": "RIGHT",
+      "studs": 10,
+      "durationMs": 625
+    }
+  ]
+}

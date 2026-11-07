@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Revo · Research Preview</title>
+<link rel="stylesheet" href="research-ui.css">
+<script defer src="research-ui.js"></script>
+</head>
+<body>
+<main>
+<header>
+  <div class="identity"><span class="logo">R</span><div><h1>Revo <small>Research Preview</small></h1><p>Native movement-plan validation • Android</p></div></div>
+  <p class="notice">Experimental test build. Not the complete Revolution Macro. Nothing starts automatically.</p>
+</header>
+<section class="panel">
+  <div class="between"><h2>1. Movement plan</h2><span id="plan-badge" class="pill">No plan loaded</span></div>
+  <p class="small">The included sample uses recovered <strong>Sunflower / e_lol</strong> movement geometry. Other routines may compile offline but are not approved for device execution.</p>
+  <button id="load-sample" class="secondary">Load supported e_lol sample</button>
+  <label for="plan-input">Compiled JSON (view or paste a local plan)</label>
+  <textarea id="plan-input" spellcheck="false" rows="6" placeholder='{"schema":"revo.action-plan.v1", ...}'></textarea>
+  <div class="between"><button id="validate" class="secondary">Validate plan</button><span id="plan-summary" class="small"></span></div>
+</section>
+<section class="panel">
+  <h2>2. Native control</h2>
+  <div class="two"><div><label for="account">Account</label><input id="account" value="Default" maxlength="50"></div><div><label for="field">Field</label><input id="field" value="Sunflower" disabled></div></div>
+  <label class="consent"><input id="authorize" type="checkbox"><span>I authorize this experimental Revo plan to send gestures to Roblox after pressing Start. I understand it requires accessibility permission and may not move correctly.</span></label>
+  <p id="notice" role="status" class="feedback">Load and validate the supported plan to begin.</p>
+  <div class="buttons"><button id="accessibility" class="secondary">Accessibility settings</button><button id="start" class="primary" disabled>Start in Bee Swarm</button></div>
+  <div class="buttons"><button id="pause" class="secondary" disabled>Pause / Resume</button><button id="stop" class="danger">Stop all</button></div>
+</section>
+<section class="panel">
+  <div class="between"><h2>3. Engine status</h2><button id="refresh" class="tertiary">Refresh</button></div>
+  <pre id="status" class="status" aria-live="polite">No native status yet.</pre>
+</section>
+<footer>Original installed Revo and main branch remain unchanged. No entitlement, security or game-protection bypass.</footer>
+</main>
+</body>
+</html>
