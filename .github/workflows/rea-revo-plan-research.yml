@@ -1,0 +1,114 @@
+name: Revo REA movement-plan research gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'research/rea-revo-plan-*'
+    paths:
+      - '.github/workflows/rea-revo-plan-research.yml'
+      - 'research/revo-plan/**'
+
+permissions:
+  contents: read
+
+jobs:
+  planner-and-intake-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: research/revo-plan/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compile actual recovered movement plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd research/revo-plan
+          go test ./... -count=1 -v
+          go build -trimpath -o /tmp/revo-plan ./cmd/revo-plan
+          /tmp/revo-plan -script scripts/e_lol.lua -width 2 -length 8 -out /tmp/e_lol.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/e_lol.json'))
+          assert x['schema']=='revo.action-plan.v1'
+          assert x['dryRunOnly'] is True
+          assert x['movementMsPerStud']==62.5
+          assert x['pattern']=='e_lol'
+          assert len(x['actions'])==18
+          assert x['actions'][0]['direction']=='LEFT'
+          assert x['actions'][-1]['direction']=='RIGHT'
+          print('PASS: 18 source-derived, bounded gather movements')
+          PY
+      - name: Verify real Java plan loader and native adapter (no input)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/revo-check/classes /tmp/revo-check/source
+          curl -fsSL --retry 3 -o /tmp/revo-check/json.jar \
+            https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar
+          echo '3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed  /tmp/revo-check/json.jar' | sha256sum -c -
+          TEST=research/revo-plan/android-sandbox
+          javac -cp /tmp/revo-check/json.jar -d /tmp/revo-check/classes \
+            "$TEST/RevoActionPlan.java" "$TEST/PlanIntakeTest.java"
+          java -cp "/tmp/revo-check/classes:/tmp/revo-check/json.jar" \
+            com.revolution.android.PlanIntakeTest /tmp/e_lol.json
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-check/source.zip
+          unzip -q /tmp/revo-check/source.zip -d /tmp/revo-check/source
+          SRC=/tmp/revo-check/source/revo-android/app/src/main/java/com/revolution/android/RevoGatherAdapter.java
+          python3 research/revo-plan/tools/patch_android_plan_intake.py \
+            --source "$SRC" --output /tmp/revo-check/RevoGatherAdapter.java
+          mapfile -t STUBS < <(find "$TEST/test-stubs" -name '*.java' -type f)
+          javac -cp /tmp/revo-check/json.jar -d /tmp/revo-check/classes \
+            "${STUBS[@]}" "$TEST/RevoActionPlan.java" \
+            /tmp/revo-check/RevoGatherAdapter.java "$TEST/PlanIntegrationTest.java"
+          java -cp "/tmp/revo-check/classes:/tmp/revo-check/json.jar" \
+            com.revolution.android.PlanIntegrationTest /tmp/e_lol.json
+
+  native-android-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: planner-and-intake-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+      - name: Rebuild Android source in an isolated CI workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          cat .ci/source.part00 .ci/source.part01 .ci/source.part02 .ci/source.part03 | base64 --decode > /tmp/revo-source.zip
+          unzip -q /tmp/revo-source.zip
+          python3 tools/patch-native-v0211-bee-swarm-launch.py
+          python3 tools/patch-native-v0212-hive-routing.py
+          python3 tools/patch-native-v0212-field-routing.py
+          python3 tools/patch-native-v0212-template-contrast.py
+          python3 tools/patch-native-v0212-remote-agent.py
+          JAVA=revo-android/app/src/main/java/com/revolution/android
+          python3 research/revo-plan/tools/patch_android_plan_intake.py \
+            --source "$JAVA/RevoGatherAdapter.java" --output /tmp/RevoGatherAdapter.java
+          cp /tmp/RevoGatherAdapter.java "$JAVA/RevoGatherAdapter.java"
+          cp research/revo-plan/android-sandbox/RevoActionPlan.java "$JAVA/RevoActionPlan.java"
+          grep -q 'enablePlannedExecution' "$JAVA/RevoGatherAdapter.java"
+          grep -q 'class RevoActionPlan' "$JAVA/RevoActionPlan.java"
+          gradle -p revo-android --stacktrace :app:assembleDebug
+          test -s revo-android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-only-revo-plan-intake-apk
+          path: revo-android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
